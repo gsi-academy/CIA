@@ -55,6 +55,10 @@ class User(Base):
     password_hash = Column(String)
     role = Column(Integer, default=1)  # 0: Admin, 1: Musyrif
     is_active = Column(Boolean, default=True)
+    # Data tambahan musyrif
+    phone = Column(String, nullable=True)
+    nip = Column(String, nullable=True)
+    unit = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow)
 
