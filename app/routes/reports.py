@@ -5,18 +5,17 @@ from pydantic import BaseModel
 from typing import Optional
 
 from app.database import SessionLocal
-from app.models.models import Report, ReportStatus, ReportAnalysis, ReportVariableScore
+from app.models.models import Report, ReportStatus, ReportAnalysis, ReportVariableScore, Treatment
 from app.core.security import decode_access_token
 from fastapi.security import OAuth2PasswordBearer
 
-from app.models.models import Treatment
-
-# Import AI Engine (Pastikan file app/core/ai_engine.py sudah dibuat)
+# Import AI Engine
+from app.schemas.report import ReportResponse, ReportSubmit
 from app.core.ai_engine import analyze_report
 
 router = APIRouter(prefix="/reports", tags=["Reports"])
 
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login")
 
 
 # =========================
@@ -37,7 +36,7 @@ def get_current_user(token: str = Depends(oauth2_scheme)):
     payload = decode_access_token(token)
     if payload is None:
         raise HTTPException(status_code=401, detail="Invalid token")
-    return payload  # {sub: user_id, role: 0/1}
+    return payload
 
 
 # =========================
@@ -56,19 +55,21 @@ class ReportVerify(BaseModel):
 # =========================
 # 1. SUBMIT LAPORAN (TEXT)
 # =========================
-@router.post("/submit")
+@router.post(
+    "/submit",
+    response_model=ReportResponse,
+    summary="Submit Laporan Santri",
+    description="Menerima transkrip laporan harian musyrif untuk dianalisis oleh AI."
+)
 def submit_report(
     data: ReportSubmit,
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user)
 ):
-
     user_id = current_user["sub"]
     today = date.today()
 
-    # =========================
-    # RULE: 1 HARI 1 LAPORAN
-    # =========================
+    # Rule: 1 Hari 1 Laporan (Bisa dimatikan sementara dengan comment untuk testing)
     existing = db.query(Report).filter(
         Report.musyrif_id == user_id,
         Report.santri_id == data.santri_id,
@@ -76,33 +77,24 @@ def submit_report(
     ).first()
 
     if existing:
-        raise HTTPException(
-            status_code=400,
-            detail="Laporan untuk santri ini sudah ada hari ini"
-        )
+        raise HTTPException(status_code=400, detail="Laporan untuk santri ini sudah ada hari ini")
 
-    # =========================
-    # SIMPAN KE DATABASE
-    # =========================
     report = Report(
         musyrif_id=user_id,
         santri_id=data.santri_id,
         semester_id=data.semester_id,
         report_date=today,
-        audio_url=None,  # tidak dipakai lagi
         transcript=data.transcript,
         status=ReportStatus.pending
     )
-
     db.add(report)
     db.commit()
     db.refresh(report)
 
     return {
         "message": "Laporan berhasil dikirim",
-        "report_id": str(report.id)
+        "report_id": str(report.id)  # <--- INI YANG PENTING!
     }
-
 
 # =========================
 # 2. VERIFIKASI LAPORAN
@@ -111,35 +103,25 @@ def submit_report(
 def verify_report(
     report_id: str,
     data: ReportVerify,
-    background_tasks: BackgroundTasks,  # <--- DITAMBAHKAN DI SINI
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user)
 ):
-
     report = db.query(Report).filter(Report.id == report_id).first()
 
     if not report:
         raise HTTPException(status_code=404, detail="Report tidak ditemukan")
-
     if report.status != ReportStatus.pending:
         raise HTTPException(status_code=400, detail="Report sudah diproses")
 
-    # update transcript jika diedit
     if data.text:
         report.transcript = data.text
 
-    # ubah status
     report.status = ReportStatus.processing
     db.commit()
 
-    # =========================
-    # AI PROCESS DI BACKGROUND
-    # =========================
     background_tasks.add_task(process_ai, str(report.id))
-
-    return {
-        "message": "Laporan diverifikasi dan dikirim ke AI Engine untuk diproses"
-    }
+    return {"message": "Laporan diverifikasi dan dikirim ke AI Engine"}
 
 
 # =========================
@@ -147,7 +129,6 @@ def verify_report(
 # =========================
 def process_ai(report_id: str):
     db = SessionLocal()
-
     report = db.query(Report).filter(Report.id == report_id).first()
 
     if not report:
@@ -155,45 +136,50 @@ def process_ai(report_id: str):
         return
 
     try:
-        # =========================
-        # JALANKAN AI
-        # =========================
+        # 1. Jalankan AI (Sekarang outputnya ada 'evidence')
         result = analyze_report(report.transcript)
 
-        # =========================
-        # SIMPAN ANALYSIS
-        # =========================
+        # 2. Simpan Analysis
         analysis = ReportAnalysis(
             report_id=report.id,
             raw_llm_output=result,
             model_used="gpt-4o-mini",
             processing_ms=0
         )
-
         db.add(analysis)
         db.commit()
         db.refresh(analysis)
 
-        # =========================
-        # SIMPAN SCORE DETAIL
-        # =========================
+        # ========================================================
+        # UPDATE DI SINI: SIMPAN SCORE DETAIL + EVIDENCE (KMS MAPPING)
+        # ========================================================
         scores = [
-            ("karakter", result.get("karakter_score", 0)),
-            ("mental", result.get("mental_score", 0)),
-            ("softskill", result.get("softskill_score", 0)),
+            ("karakter", result["karakter_score"], result["evidence"].get("karakter")),
+            ("mental", result["mental_score"], result["evidence"].get("mental")),
+            ("softskill", result["softskill_score"], result["evidence"].get("softskill")),
         ]
 
-        for dim, score in scores:
+        for dim, score, evidence in scores:
             db.add(ReportVariableScore(
                 report_analysis_id=analysis.id,
                 santri_id=report.santri_id,
-                kms_variable_id=None,  # sementara kosong (nanti kita mapping KMS)
+                kms_variable_id=None,
                 score=score,
-                evidence_excerpt=report.transcript,
+                evidence_excerpt=evidence,  # <--- BUKTI TEKS AI MASUK KE SINI
                 sentiment="neutral"
             ))
 
-        # Ubah status laporan jadi 'analyzed' setelah sukses
+        # 3. SIMPAN TREATMENT
+        db.add(Treatment(
+            santri_id=report.santri_id,
+            semester_id=report.semester_id,
+            generated_from_report=report.id,
+            recommendation=result.get("recommendation", "Pantau terus perkembangan santri."),
+            priority="medium",
+            status="pending"
+        ))
+
+        # 4. Update Status Laporan
         report.status = ReportStatus.analyzed
         db.commit()
 
@@ -201,19 +187,5 @@ def process_ai(report_id: str):
         print(f"Error saat memproses AI: {e}")
         report.status = ReportStatus.failed
         db.commit()
-
-        # =========================
-        # SIMPAN TREATMENT
-        # =========================
-        db.add(Treatment(
-            santri_id=report.santri_id,
-            semester_id=report.semester_id,
-            generated_from_report=report.id,
-            recommendation=result.get("recommendation"),
-            priority="medium",
-            status="pending"
-        ))
-        db.commit()
-    
     finally:
         db.close()

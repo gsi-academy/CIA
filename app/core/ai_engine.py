@@ -20,15 +20,24 @@ Kamu adalah pakar psikologi pendidikan santri.
 Analisis teks laporan dan berikan output JSON:
 
 {
-  "karakter_score": 0-100,
-  "mental_score": 0-100,
-  "softskill_score": 0-100,
-  "analysis": "penjelasan singkat",
+  "karakter": {
+    "score": 0-100,
+    "evidence": "kutipan teks yang mendukung"
+  },
+  "mental": {
+    "score": 0-100,
+    "evidence": "kutipan teks yang mendukung"
+  },
+  "softskill": {
+    "score": 0-100,
+    "evidence": "kutipan teks yang mendukung"
+  },
   "recommendation": "saran tindakan untuk musyrif (1-2 kalimat)"
 }
 
 Aturan:
 - JSON saja
+- Evidence HARUS kutipan dari teks
 - Jika tidak jelas → skor 50
 """
 
@@ -47,11 +56,24 @@ def analyze_report(transcript: str):
 
     try:
         result = json.loads(response.content)
-        return result
+
+        return {
+            "karakter_score": result["karakter"]["score"],
+            "mental_score": result["mental"]["score"],
+            "softskill_score": result["softskill"]["score"],
+            "evidence": {
+                "karakter": result["karakter"]["evidence"],
+                "mental": result["mental"]["evidence"],
+                "softskill": result["softskill"]["evidence"]
+            },
+            "recommendation": result["recommendation"]
+        }
+
     except:
         return {
             "karakter_score": 50,
             "mental_score": 50,
             "softskill_score": 50,
-            "analysis": "fallback karena parsing gagal"
+            "evidence": {},
+            "recommendation": "Perlu observasi lebih lanjut"
         }
