@@ -1,4 +1,4 @@
-from pydantic import BaseModel, EmailStr
+from typing import Optional
 from pydantic import BaseModel, EmailStr, Field
 
 # =========================
@@ -24,3 +24,30 @@ class UserLogin(BaseModel):
 class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
+
+
+# =========================
+# RESPONSE USER (GET /auth/me)
+# =========================
+class UserResponse(BaseModel):
+    id: str
+    name: str
+    email: str
+    role: int
+    phone: Optional[str] = None
+    nip: Optional[str] = None
+    unit: Optional[str] = None
+    created_at: str
+
+    class Config:
+        from_attributes = True
+
+
+# =========================
+# UPDATE PROFILE (PATCH /auth/me)
+# =========================
+class UserUpdate(BaseModel):
+    name: Optional[str] = None
+    phone: Optional[str] = None
+    nip: Optional[str] = None
+    unit: Optional[str] = None
