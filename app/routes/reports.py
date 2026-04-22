@@ -5,7 +5,13 @@ from pydantic import BaseModel
 from typing import Optional
 
 from app.database import SessionLocal
-from app.models.models import Report, ReportStatus, ReportAnalysis, ReportVariableScore, Treatment
+from app.models.models_v2 import (
+    Report,
+    ReportAnalysis,
+    ReportCharStatus,
+    ReportMentalStatus,
+    ReportSoftskillStatus
+)
 from app.core.security import decode_access_token
 from fastapi.security import OAuth2PasswordBearer
 

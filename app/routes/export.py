@@ -3,10 +3,15 @@ from sqlalchemy.orm import Session
 
 from app.database import SessionLocal
 from app.schemas.report import ExportResponse
-from app.models.models import (
-    ReportVariableScore,
-    Treatment,
-    Santri
+from app.models.models_v2 import (
+    Report,
+    ReportAnalysis,
+    ReportCharStatus,
+    ReportMentalStatus,
+    ReportSoftskillStatus,
+    Profiling,
+    Student,
+    Semester
 )
 from app.core.security import decode_access_token
 from fastapi.security import OAuth2PasswordBearer

@@ -3,16 +3,19 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func, desc
 
 from app.database import SessionLocal
-from app.models.models import (
-    ReportVariableScore,
-    KMSProfile
+from app.models.models_v2 import (
+    Report,
+    ReportAnalysis,
+    StudentChar,
+    StudentMental,
+    StudentSoftskill
 )
 from app.core.security import decode_access_token
 from fastapi.security import OAuth2PasswordBearer
 
 from app.core.alerts import check_and_alert
 from app.schemas.report import DashboardResponse
-from app.models.models import Santri
+from app.models.models_v2 import Student
 
 router = APIRouter(prefix="/dashboard", tags=["Dashboard"])
 

@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.database import SessionLocal
-from app.models.models import Santri, Semester
+from app.models.models_v2 import Student, Semester
 from pydantic import BaseModel
 from app.core.security import decode_access_token
 from fastapi.security import OAuth2PasswordBearer

@@ -3,11 +3,13 @@ from sqlalchemy.orm import Session
 from sqlalchemy import desc
 
 from app.database import SessionLocal
-from app.models.models import (
+from app.models.models_v2 import (
     Report,
-    ReportVariableScore,
     ReportAnalysis,
-    Treatment
+    ReportCharStatus,
+    ReportMentalStatus,
+    ReportSoftskillStatus,
+    Student
 )
 from app.core.security import decode_access_token
 from fastapi.security import OAuth2PasswordBearer
