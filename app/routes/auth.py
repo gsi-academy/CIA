@@ -4,16 +4,16 @@ from datetime import datetime
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 
 from app.database import SessionLocal
-<<<<<<< HEAD
+# <<<<<<< HEAD
 from app.models.models_v2 import User
 from app.schemas.auth import UserRegister, UserLogin, TokenResponse
 from fastapi.security import OAuth2PasswordRequestForm
 from app.core.security import hash_password, verify_password, create_access_token
-=======
+
 from app.models.models import User
 from app.schemas.auth import UserRegister, UserLogin, TokenResponse, UserResponse, UserUpdate
 from app.core.security import hash_password, verify_password, create_access_token, decode_access_token
->>>>>>> 8a27fec0e74a8bdca7b3181358ed382b304ef6c8
+# >>>>>>> 8a27fec0e74a8bdca7b3181358ed382b304ef6c8
 
 router = APIRouter(prefix="/auth", tags=["Auth"])
 
