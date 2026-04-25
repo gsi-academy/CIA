@@ -4,16 +4,9 @@ from datetime import datetime
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 
 from app.database import SessionLocal
-# <<<<<<< HEAD
-from app.models.models_v2 import User
-from app.schemas.auth import UserRegister, UserLogin, TokenResponse
-from fastapi.security import OAuth2PasswordRequestForm
-from app.core.security import hash_password, verify_password, create_access_token
-
 from app.models.models import User
-from app.schemas.auth import UserRegister, UserLogin, TokenResponse, UserResponse, UserUpdate
+from app.schemas.auth import UserRegister, UserLogin, TokenResponse, UserUpdate
 from app.core.security import hash_password, verify_password, create_access_token, decode_access_token
-# >>>>>>> 8a27fec0e74a8bdca7b3181358ed382b304ef6c8
 
 router = APIRouter(prefix="/auth", tags=["Auth"])
 
@@ -43,7 +36,7 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(
 # =========================
 # REGISTER
 # =========================
-@router.post("/register", response_model=TokenResponse)
+@router.post("/register")
 def register(user: UserRegister, db: Session = Depends(get_db)):
 
     # cek email sudah ada atau belum
@@ -59,7 +52,8 @@ def register(user: UserRegister, db: Session = Depends(get_db)):
         name=user.name,
         email=user.email,
         password_hash=hashed_password,
-        role=user.role if user.role in [0, 1] else 1
+        role=user.role if user.role in [0, 1] else 1,
+        created_at=datetime.utcnow()
     )
 
     db.add(new_user)
@@ -69,13 +63,16 @@ def register(user: UserRegister, db: Session = Depends(get_db)):
     # buat token
     token = create_access_token({"sub": str(new_user.id), "role": new_user.role})
 
-    return {"access_token": token}
+    return {
+        "data": {"access_token": token, "token_type": "bearer"},
+        "message": "Registration successful"
+    }
 
 
 # =========================
 # LOGIN
 # =========================
-@router.post("/login", response_model=TokenResponse)
+@router.post("/login")
 def login(
     form_data: OAuth2PasswordRequestForm = Depends(),
     db: Session = Depends(get_db)
@@ -100,7 +97,10 @@ def login(
         "role": db_user.role
     })
 
-    return {"access_token": token}
+    return {
+        "data": {"access_token": token, "token_type": "bearer"},
+        "message": "Login successful"
+    }
 
 
 # =========================
@@ -109,14 +109,17 @@ def login(
 @router.get("/me")
 def get_me(current_user: User = Depends(get_current_user)):
     return {
-        "id": str(current_user.id),
-        "name": current_user.name,
-        "email": current_user.email,
-        "role": current_user.role,
-        "phone": current_user.phone,
-        "nip": current_user.nip,
-        "unit": current_user.unit,
-        "created_at": str(current_user.created_at),
+        "data": {
+            "id": str(current_user.id),
+            "name": current_user.name,
+            "email": current_user.email,
+            "role": current_user.role,
+            "phone": current_user.phone,
+            "nip": current_user.nip,
+            "unit": current_user.unit,
+            "created_at": str(current_user.created_at),
+        },
+        "message": "User profile retrieved successfully"
     }
 
 
@@ -143,12 +146,15 @@ def update_me(
     db.refresh(current_user)
 
     return {
-        "id": str(current_user.id),
-        "name": current_user.name,
-        "email": current_user.email,
-        "role": current_user.role,
-        "phone": current_user.phone,
-        "nip": current_user.nip,
-        "unit": current_user.unit,
-        "created_at": str(current_user.created_at),
+        "data": {
+            "id": str(current_user.id),
+            "name": current_user.name,
+            "email": current_user.email,
+            "role": current_user.role,
+            "phone": current_user.phone,
+            "nip": current_user.nip,
+            "unit": current_user.unit,
+            "created_at": str(current_user.created_at),
+        },
+        "message": "Profile updated successfully"
     }
