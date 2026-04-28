@@ -1,23 +1,42 @@
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, List
 from datetime import datetime
 from uuid import UUID
 
-# ================= KMS PARAMETER =================
-class KMSParamBase(BaseModel):
-    category: str
-    theme: str
-    name: str
-    description: str
-
-class KMSParamCreate(KMSParamBase):
-    pass
-
-class KMSParamResponse(KMSParamBase):
+# ================= KMS DETAIL INDICATOR =================
+class KMSDetailResponse(BaseModel):
     id: UUID
+    indicator_detail: str
+    action_template: Optional[str] = None  # Panduan tindakan musyrif
 
     class Config:
         from_attributes = True
+
+class KMSDetailCreate(BaseModel):
+    indicator_detail: str
+    action_template: Optional[str] = None  # Opsional: override template otomatis
+
+# ================= KMS MAIN INDICATOR =================
+class KMSIndicatorBase(BaseModel):
+    category: str
+    name: str
+    description: str
+    theme: Optional[str] = "General"
+    weight: Optional[float] = 1.0
+
+class KMSIndicatorCreate(KMSIndicatorBase):
+    pass
+
+class KMSIndicatorResponse(KMSIndicatorBase):
+    id: UUID
+    details: List[KMSDetailResponse] = []
+
+    class Config:
+        from_attributes = True
+
+# Alias lama untuk backward-compat internal (hapus setelah migrasi penuh)
+KMSParamCreate = KMSIndicatorCreate
+KMSParamResponse = KMSIndicatorResponse
 
 # ================= STUDENT ACHIEVEMENT =================
 class AchievementBase(BaseModel):

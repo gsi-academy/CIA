@@ -27,6 +27,19 @@ def health_check():
 # BUAT SEMUA TABEL
 Base.metadata.create_all(bind=engine)
 
+# QUICK FIX: Migrasi kolom yang hilang (birth_info, address, guardian_name, musyrif_id)
+from sqlalchemy import text
+with engine.connect() as conn:
+    try:
+        conn.execute(text("ALTER TABLE santri ADD COLUMN IF NOT EXISTS birth_info VARCHAR"))
+        conn.execute(text("ALTER TABLE santri ADD COLUMN IF NOT EXISTS address TEXT"))
+        conn.execute(text("ALTER TABLE santri ADD COLUMN IF NOT EXISTS guardian_name VARCHAR"))
+        conn.execute(text("ALTER TABLE santri ADD COLUMN IF NOT EXISTS musyrif_id UUID REFERENCES users(id)"))
+        conn.execute(text("ALTER TABLE kms_main_indicators ADD COLUMN IF NOT EXISTS weight FLOAT DEFAULT 1.0"))
+        conn.commit()
+    except Exception as e:
+        print(f"Migration notice: {e}")
+
 # =========================
 # API VERSIONING PREFIX
 # =========================

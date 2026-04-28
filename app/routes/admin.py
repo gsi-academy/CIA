@@ -1,13 +1,16 @@
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.encoders import jsonable_encoder
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError
 from datetime import date, datetime
 import uuid
+import json
 
 from typing import List
 
 from app.database import SessionLocal
 from app.models.models import (
-    User, Student, Semester, KMSParameter, Report, KMSProfile
+    User, Student, Semester, KMSMainIndicator, KMSDetailIndicator, Report, KMSProfile, ReportAnalysis, StudentAchievement, ReportParameterDetection, ActivityLog, StudentAnalysisSnapshot
 )
 from app.core.security import decode_access_token, hash_password
 from fastapi.security import OAuth2PasswordBearer
@@ -37,10 +40,24 @@ def get_current_admin(token: str = Depends(oauth2_scheme)):
         raise HTTPException(status_code=403, detail="Akses khusus Admin")
     return payload
 
-from app.schemas.auth import MusyrifCreate
-from app.schemas.santri import SantriCreate
-from app.schemas.semester import SemesterCreate
-from app.schemas.kms import KMSParamCreate
+from app.schemas.auth import MusyrifCreate, UserResponse
+from app.schemas.santri import SantriCreate, SantriUpdate, SantriResponse
+from app.schemas.semester import SemesterCreate, SemesterResponse
+from app.schemas.kms import KMSIndicatorCreate, KMSIndicatorResponse, KMSDetailCreate
+
+# =========================
+# LOGGING HELPER
+# =========================
+def log_action(db: Session, user_id: str, action: str, detail: str):
+    user = db.query(User).filter(User.id == user_id).first()
+    new_log = ActivityLog(
+        user_id=user.id if user else None,
+        user_name=user.name if user else "System",
+        action=action,
+        detail=detail
+    )
+    db.add(new_log)
+    db.commit()
 
 # =========================
 # 1. INTELLIGENCE (STATS & LOGS)
@@ -62,12 +79,15 @@ def get_executive_summary(
         avg_mental = sum(p.mental_score for p in profiles) / len(profiles)
         avg_softskill = sum(p.softskill_score for p in profiles) / len(profiles)
 
+    critical_count = db.query(KMSProfile).filter(KMSProfile.overall_score < 50).count()
+
     return {
         "data": {
             "stats": {
                 "total_students": total_students,
                 "total_musyrif": total_musyrif,
-                "reports_today": reports_today
+                "reports_today": reports_today,
+                "critical_students": critical_count
             },
             "averages": {
                 "karakter": round(avg_karakter, 1),
@@ -80,10 +100,18 @@ def get_executive_summary(
 
 @router.get("/stats/distribution", summary="Performance Distribution for Radar Chart")
 def get_performance_distribution(db: Session = Depends(get_db), admin=Depends(get_current_admin)):
-    # Mocking distribution data
+    profiles = db.query(KMSProfile).all()
+    if not profiles:
+        values = [0, 0, 0]
+    else:
+        avg_karakter = sum(p.karakter_score for p in profiles) / len(profiles)
+        avg_mental = sum(p.mental_score for p in profiles) / len(profiles)
+        avg_softskill = sum(p.softskill_score for p in profiles) / len(profiles)
+        values = [round(avg_karakter, 1), round(avg_mental, 1), round(avg_softskill, 1)]
+
     data = {
         "labels": ["Karakter", "Mental", "Softskill"],
-        "values": [85, 70, 90]
+        "values": values
     }
     return {
         "data": data,
@@ -92,13 +120,17 @@ def get_performance_distribution(db: Session = Depends(get_db), admin=Depends(ge
 
 @router.get("/logs", summary="Recent Activity Logs")
 def get_activity_logs(db: Session = Depends(get_db), admin=Depends(get_current_admin)):
-    # Mocking logs for now
-    logs = [
-        {"time": datetime.utcnow().isoformat(), "action": "CREATE_STUDENT", "user": "Admin", "detail": "Added Ahmad"},
-        {"time": datetime.utcnow().isoformat(), "action": "LOGIN", "user": "Musyrif 1", "detail": "Logged in from IP 1.2.3.4"},
-    ]
+    logs = db.query(ActivityLog).order_by(ActivityLog.created_at.desc()).limit(10).all()
+    result = []
+    for log in logs:
+        result.append({
+            "time": log.created_at.isoformat(),
+            "action": log.action,
+            "user": log.user_name,
+            "detail": log.detail
+        })
     return {
-        "data": logs,
+        "data": result,
         "message": "Activity logs retrieved successfully"
     }
 
@@ -108,8 +140,25 @@ def get_activity_logs(db: Session = Depends(get_db), admin=Depends(get_current_a
 @router.get("/musyrif", summary="List All Musyrif")
 def list_musyrif(db: Session = Depends(get_db), admin=Depends(get_current_admin)):
     musyrifs = db.query(User).filter(User.role == 1).all()
+    result = []
+    for m in musyrifs:
+        count = db.query(Student).filter(Student.musyrif_id == m.id).count()
+        # Calculate performance based on reports count vs average (simplified)
+        report_count = db.query(Report).filter(Report.musyrif_id == m.id).count()
+        performance = min(100.0, (report_count / 10) * 100) if report_count > 0 else 0
+        
+        m_dict = {
+            "id": str(m.id),
+            "name": m.name,
+            "email": m.email,
+            "nip": m.nip,
+            "unit": m.unit,
+            "students_count": count,
+            "performance": round(performance, 1)
+        }
+        result.append(m_dict)
     return {
-        "data": musyrifs,
+        "data": result,
         "message": "Musyrif list retrieved successfully"
     }
 
@@ -128,30 +177,83 @@ def create_musyrif(data: MusyrifCreate, db: Session = Depends(get_db), admin=Dep
         unit=data.unit
     )
     db.add(new_user)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=400, detail="Email sudah terdaftar (Integrity Error)")
     db.refresh(new_user)
+    log_action(db, admin.get("sub"), "CREATE_MUSYRIF", f"Created account for {new_user.name}")
     return {
-        "data": new_user,
+        "data": UserResponse.from_orm(new_user),
         "message": "Musyrif created successfully"
     }
 
-@router.get("/musyrif/{id}", summary="Musyrif Performance Detail")
+@router.get("/musyrif/{id}", summary="Detailed Musyrif Personnel File")
 def get_musyrif_detail(id: str, db: Session = Depends(get_db), admin=Depends(get_current_admin)):
     musyrif = db.query(User).filter(User.id == id, User.role == 1).first()
     if not musyrif:
         raise HTTPException(status_code=404, detail="Musyrif tidak ditemukan")
     
-    # Mocking effectiveness stats
-    data = {
-        "profile": musyrif,
-        "stats": {
-            "total_reports": db.query(Report).filter(Report.musyrif_id == musyrif.id).count(),
-            "effectiveness": 92.5
-        }
-    }
+    # Get stats
+    report_count = db.query(Report).filter(Report.musyrif_id == musyrif.id).count()
+    effectiveness = min(100.0, (report_count / 10) * 100) if report_count > 0 else 0
+
+    # Get assigned students (domain)
+    students = db.query(Student).filter(Student.musyrif_id == id).all()
+    student_list = []
+    for s in students:
+        student_list.append({
+            "id": str(s.id),
+            "name": s.name,
+            "kelas": s.kelas,
+            "status": "Aktif" if s.is_active else "Tidak Aktif"
+        })
+    
     return {
-        "data": data,
-        "message": "Musyrif detail retrieved successfully"
+        "data": {
+            "profile": musyrif,
+            "stats": {
+                "total_reports": report_count,
+                "effectiveness": round(effectiveness, 1)
+            },
+            "domain": student_list
+        },
+        "message": "Musyrif detail retrieved"
+    }
+
+@router.put("/musyrif/{id}/domain", summary="Bulk Update Musyrif Domain")
+def update_musyrif_domain(id: str, student_ids: list[uuid.UUID], db: Session = Depends(get_db), admin=Depends(get_current_admin)):
+    # Verify musyrif exists
+    musyrif = db.query(User).filter(User.id == id, User.role == 1).first()
+    if not musyrif:
+        raise HTTPException(status_code=404, detail="Musyrif tidak ditemukan")
+    
+    # First, unassign all students currently assigned to this musyrif
+    db.query(Student).filter(Student.musyrif_id == id).update({Student.musyrif_id: None})
+    
+    # Then assign the new ones
+    if student_ids:
+        db.query(Student).filter(Student.id.in_(student_ids)).update({Student.musyrif_id: id})
+    
+    db.commit()
+    return {
+        "data": None,
+        "message": f"Domain {musyrif.name} updated successfully"
+    }
+
+@router.delete("/musyrif/{id}", summary="Delete Musyrif Account")
+def delete_musyrif(id: str, db: Session = Depends(get_db), admin=Depends(get_current_admin)):
+    musyrif = db.query(User).filter(User.id == id, User.role == 1).first()
+    if not musyrif:
+        raise HTTPException(status_code=404, detail="Musyrif tidak ditemukan")
+    name = musyrif.name
+    db.delete(musyrif)
+    db.commit()
+    log_action(db, admin.get("sub"), "DELETE_MUSYRIF", f"Deleted account for {name}")
+    return {
+        "data": None,
+        "message": "Musyrif deleted successfully"
     }
 
 # =========================
@@ -160,35 +262,134 @@ def get_musyrif_detail(id: str, db: Session = Depends(get_db), admin=Depends(get
 @router.get("/students")
 def get_all_students(db: Session = Depends(get_db), admin=Depends(get_current_admin)):
     students = db.query(Student).all()
+    # Flatten musyrif name for easier UI handling
+    result = []
+    for s in students:
+        s_dict = {
+            "id": str(s.id),
+            "nis": s.nis,
+            "name": s.name,
+            "kelas": s.kelas,
+            "angkatan": s.angkatan,
+            "status": "Aktif" if s.is_active else "Tidak Aktif",
+            "musyrif": s.musyrif.name if s.musyrif else "Unassigned",
+            "musyrif_id": str(s.musyrif_id) if s.musyrif_id else None
+        }
+        result.append(s_dict)
     return {
-        "data": students,
+        "data": result,
         "message": "Student list retrieved successfully"
+    }
+
+@router.get("/students/{id}", summary="Get Single Student Detail for Admin")
+def get_admin_student_detail(id: str, db: Session = Depends(get_db), admin=Depends(get_current_admin)):
+    student = db.query(Student).filter(Student.id == id).first()
+    if not student:
+        raise HTTPException(status_code=404, detail="Santri tidak ditemukan")
+    
+    # Get latest analysis snapshot for treatment recommendation
+    snapshot = db.query(StudentAnalysisSnapshot).filter(
+        StudentAnalysisSnapshot.santri_id == id
+    ).order_by(StudentAnalysisSnapshot.performed_at.desc()).first()
+    
+    treatment_summary = "Belum ada analisis mendalam."
+    if snapshot:
+        try:
+            tk = json.loads(snapshot.treatment_k or "[]")
+            tm = json.loads(snapshot.treatment_m or "[]")
+            ts = json.loads(snapshot.treatment_s or "[]")
+            all_treatments = tk + tm + ts
+            if all_treatments:
+                treatment_summary = "; ".join([t.get("main_name", "") for t in all_treatments[:3] if t.get("main_name")])
+        except Exception:
+            treatment_summary = snapshot.insight or "Belum ada analisis mendalam."
+
+    return {
+        "data": {
+            "id": str(student.id),
+            "name": student.name,
+            "nis": student.nis,
+            "kelas": student.kelas,
+            "angkatan": student.angkatan,
+            "birth_info": student.birth_info,
+            "address": student.address,
+            "guardian_name": student.guardian_name,
+            "musyrif": student.musyrif.name if student.musyrif else "Unassigned",
+            "musyrif_id": str(student.musyrif_id) if student.musyrif_id else None,
+            "is_active": student.is_active,
+            "treatment": treatment_summary
+        },
+        "message": "Student detail retrieved successfully"
     }
 
 @router.post("/students")
 def create_student(data: SantriCreate, db: Session = Depends(get_db), admin=Depends(get_current_admin)):
     student = Student(**data.dict())
     db.add(student)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=400, detail="NIS sudah terdaftar atau format salah")
     db.refresh(student)
+    log_action(db, admin.get("sub"), "CREATE_STUDENT", f"Enrolled student {student.name} (NIS: {student.nis})")
     return {
-        "data": student,
+        "data": SantriResponse.from_orm(student),
         "message": "Student created successfully"
     }
 
-@router.put("/students/{id}")
-def update_student(id: str, data: SantriCreate, db: Session = Depends(get_db), admin=Depends(get_current_admin)):
+@router.patch("/students/{id}/assign-musyrif", summary="Set Musyrif Domain for Student")
+def assign_musyrif(id: str, musyrif_id: uuid.UUID, db: Session = Depends(get_db), admin=Depends(get_current_admin)):
     student = db.query(Student).filter(Student.id == id).first()
     if not student:
         raise HTTPException(status_code=404, detail="Santri tidak ditemukan")
     
-    for key, value in data.dict().items():
+    # Verify musyrif exists
+    musyrif = db.query(User).filter(User.id == musyrif_id, User.role == 1).first()
+    if not musyrif:
+        raise HTTPException(status_code=404, detail="Musyrif tidak ditemukan")
+    
+    student.musyrif_id = musyrif_id
+    db.commit()
+    db.refresh(student)
+    return {
+        "data": {
+            "student_name": student.name,
+            "musyrif_name": musyrif.name
+        },
+        "message": "Musyrif assigned successfully"
+    }
+
+@router.get("/students/{id}/latest-analysis")
+def get_latest_student_analysis(id: str, db: Session = Depends(get_db), admin=Depends(get_current_admin)):
+    latest_report = db.query(Report).filter(Report.santri_id == id).order_by(Report.report_date.desc()).first()
+    if not latest_report:
+        return {"data": None, "message": "No reports found for this student"}
+    
+    analysis = db.query(ReportAnalysis).filter(ReportAnalysis.report_id == latest_report.id).first()
+    return {
+        "data": {
+            "insight": analysis.insight if analysis else "No analysis available yet.",
+            "date": latest_report.report_date
+        },
+        "message": "Latest analysis retrieved"
+    }
+
+@router.put("/students/{id}")
+def update_student(id: str, data: SantriUpdate, db: Session = Depends(get_db), admin=Depends(get_current_admin)):
+    student = db.query(Student).filter(Student.id == id).first()
+    if not student:
+        raise HTTPException(status_code=404, detail="Santri tidak ditemukan")
+    
+    update_data = data.dict(exclude_unset=True)
+    for key, value in update_data.items():
         setattr(student, key, value)
     
     db.commit()
     db.refresh(student)
+    log_action(db, admin.get("sub"), "UPDATE_STUDENT", f"Updated profile for {student.name}")
     return {
-        "data": student,
+        "data": jsonable_encoder(student),
         "message": "Student updated successfully"
     }
 
@@ -197,8 +398,10 @@ def delete_student(id: str, db: Session = Depends(get_db), admin=Depends(get_cur
     student = db.query(Student).filter(Student.id == id).first()
     if not student:
         raise HTTPException(status_code=404, detail="Santri tidak ditemukan")
+    name = student.name
     db.delete(student)
     db.commit()
+    log_action(db, admin.get("sub"), "DELETE_STUDENT", f"Removed student record for {name}")
     return {
         "data": None,
         "message": "Student deleted successfully"
@@ -206,10 +409,11 @@ def delete_student(id: str, db: Session = Depends(get_db), admin=Depends(get_cur
 
 @router.get("/students/export")
 def export_students(db: Session = Depends(get_db), admin=Depends(get_current_admin)):
-    # Mocking export
+    students = db.query(Student).all()
+    # In a real app, this would generate a CSV file. For now, we return the data.
     return {
-        "data": {"download_url": "/api/v1/admin/static/students_export.csv"},
-        "message": "Export prepared successfully"
+        "data": students,
+        "message": "Student records retrieved for export"
     }
 
 # =========================
@@ -217,62 +421,146 @@ def export_students(db: Session = Depends(get_db), admin=Depends(get_current_adm
 # =========================
 @router.get("/kms/pillars")
 def list_pillars(db: Session = Depends(get_db), admin=Depends(get_current_admin)):
-    # Mocking pillars structure
-    data = [
-        {"id": "karakter", "name": "Karakter", "params_count": 40},
-        {"id": "mental", "name": "Mental", "params_count": 34},
-        {"id": "softskill", "name": "Softskill", "params_count": 14}
-    ]
+    pillars = ["karakter", "mental", "softskill"]
+    data = []
+    for p in pillars:
+        count = db.query(KMSMainIndicator).filter(KMSMainIndicator.category == p).count()
+        data.append({
+            "id": p,
+            "name": p.capitalize(),
+            "indicators_count": count
+        })
     return {
         "data": data,
         "message": "Pillars retrieved successfully"
     }
 
-@router.get("/kms/parameters")
-def list_parameters(db: Session = Depends(get_db), admin=Depends(get_current_admin)):
-    params = db.query(KMSParameter).all()
+# =========================
+# KMS MAIN INDICATORS
+# =========================
+@router.get("/kms/indicators")
+def list_indicators(db: Session = Depends(get_db), admin=Depends(get_current_admin)):
+    indicators = db.query(KMSMainIndicator).all()
     return {
-        "data": params,
-        "message": "Parameters retrieved successfully"
+        "data": [KMSIndicatorResponse.from_orm(i) for i in indicators],
+        "message": "Indicators retrieved successfully"
     }
 
-@router.post("/kms/parameters")
-def create_parameter(data: KMSParamCreate, db: Session = Depends(get_db), admin=Depends(get_current_admin)):
-    param = KMSParameter(**data.dict())
-    db.add(param)
-    db.commit()
-    db.refresh(param)
+@router.post("/kms/indicators")
+def create_indicator(data: KMSIndicatorCreate, db: Session = Depends(get_db), admin=Depends(get_current_admin)):
+    indicator = KMSMainIndicator(**data.dict())
+    db.add(indicator)
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=400, detail="Indikator sudah ada atau format salah")
+    db.refresh(indicator)
+    log_action(db, admin.get("sub"), "CREATE_KMS_INDICATOR", f"Added KMS Indicator: {indicator.name} ({indicator.category})")
     return {
-        "data": param,
-        "message": "Parameter created successfully"
+        "data": KMSIndicatorResponse.from_orm(indicator),
+        "message": "Indicator created successfully"
     }
 
-@router.put("/kms/parameters/{id}")
-def update_parameter(id: str, data: KMSParamCreate, db: Session = Depends(get_db), admin=Depends(get_current_admin)):
-    param = db.query(KMSParameter).filter(KMSParameter.id == id).first()
-    if not param:
-        raise HTTPException(status_code=404, detail="Parameter tidak ditemukan")
+@router.put("/kms/indicators/{id}")
+def update_indicator(id: str, data: KMSIndicatorCreate, db: Session = Depends(get_db), admin=Depends(get_current_admin)):
+    indicator = db.query(KMSMainIndicator).filter(KMSMainIndicator.id == id).first()
+    if not indicator:
+        raise HTTPException(status_code=404, detail="Indikator tidak ditemukan")
     
     for key, value in data.dict().items():
-        setattr(param, key, value)
+        setattr(indicator, key, value)
     
     db.commit()
-    db.refresh(param)
+    db.refresh(indicator)
+    log_action(db, admin.get("sub"), "UPDATE_KMS_INDICATOR", f"Updated KMS Indicator: {indicator.name}")
     return {
-        "data": param,
-        "message": "Parameter updated successfully"
+        "data": KMSIndicatorResponse.from_orm(indicator),
+        "message": "Indicator updated successfully"
     }
 
-@router.delete("/kms/parameters/{id}")
-def delete_parameter(id: str, db: Session = Depends(get_db), admin=Depends(get_current_admin)):
-    param = db.query(KMSParameter).filter(KMSParameter.id == id).first()
-    if not param:
-        raise HTTPException(status_code=404, detail="Parameter tidak ditemukan")
-    db.delete(param)
+@router.delete("/kms/indicators/{id}")
+def delete_indicator(id: str, db: Session = Depends(get_db), admin=Depends(get_current_admin)):
+    indicator = db.query(KMSMainIndicator).filter(KMSMainIndicator.id == id).first()
+    if not indicator:
+        raise HTTPException(status_code=404, detail="Indikator tidak ditemukan")
+    
+    db.query(StudentAchievement).filter(StudentAchievement.parameter_id == indicator.id).delete()
+    
+    name = indicator.name
+    cat = indicator.category
+    db.delete(indicator)  # cascade ke details
     db.commit()
+    log_action(db, admin.get("sub"), "DELETE_KMS_INDICATOR", f"Deleted indicator {name} from {cat}")
     return {
         "data": None,
-        "message": "Parameter deleted successfully"
+        "message": "Indicator deleted successfully"
+    }
+
+# =========================
+# KMS DETAIL INDICATORS
+# =========================
+@router.get("/kms/indicators/{id}/details", summary="List Detail Indicators for a Main Indicator")
+def list_detail_indicators(id: str, db: Session = Depends(get_db), admin=Depends(get_current_admin)):
+    indicator = db.query(KMSMainIndicator).filter(KMSMainIndicator.id == id).first()
+    if not indicator:
+        raise HTTPException(status_code=404, detail="Indikator utama tidak ditemukan")
+    return {
+        "data": [{"id": str(d.id), "indicator_detail": d.indicator_detail} for d in indicator.details],
+        "message": "Detail indicators retrieved successfully"
+    }
+
+@router.post("/kms/indicators/{id}/details", summary="Add a Detail Indicator")
+def add_detail_indicator(id: str, data: KMSDetailCreate, db: Session = Depends(get_db), admin=Depends(get_current_admin)):
+    indicator = db.query(KMSMainIndicator).filter(KMSMainIndicator.id == id).first()
+    if not indicator:
+        raise HTTPException(status_code=404, detail="Indikator utama tidak ditemukan")
+    
+    detail = KMSDetailIndicator(
+        main_indicator_id=indicator.id,
+        indicator_detail=data.indicator_detail
+    )
+    db.add(detail)
+    db.commit()
+    db.refresh(detail)
+    log_action(db, admin.get("sub"), "CREATE_KMS_DETAIL", f"Added detail to {indicator.name}: {detail.indicator_detail[:40]}")
+    return {
+        "data": {"id": str(detail.id), "indicator_detail": detail.indicator_detail},
+        "message": "Detail indicator added successfully"
+    }
+
+@router.put("/kms/indicators/{id}/details/{detail_id}", summary="Update a Detail Indicator")
+def update_detail_indicator(id: str, detail_id: str, data: KMSDetailCreate, db: Session = Depends(get_db), admin=Depends(get_current_admin)):
+    detail = db.query(KMSDetailIndicator).filter(
+        KMSDetailIndicator.id == detail_id,
+        KMSDetailIndicator.main_indicator_id == id
+    ).first()
+    if not detail:
+        raise HTTPException(status_code=404, detail="Indikator detail tidak ditemukan")
+    
+    detail.indicator_detail = data.indicator_detail
+    db.commit()
+    db.refresh(detail)
+    return {
+        "data": {"id": str(detail.id), "indicator_detail": detail.indicator_detail},
+        "message": "Detail indicator updated successfully"
+    }
+
+@router.delete("/kms/indicators/{id}/details/{detail_id}", summary="Delete a Detail Indicator")
+def delete_detail_indicator(id: str, detail_id: str, db: Session = Depends(get_db), admin=Depends(get_current_admin)):
+    detail = db.query(KMSDetailIndicator).filter(
+        KMSDetailIndicator.id == detail_id,
+        KMSDetailIndicator.main_indicator_id == id
+    ).first()
+    if not detail:
+        raise HTTPException(status_code=404, detail="Indikator detail tidak ditemukan")
+    
+    db.delete(detail)
+    db.commit()
+    log_action(db, admin.get("sub"), "DELETE_KMS_DETAIL", f"Deleted detail indicator: {detail.indicator_detail[:40]}")
+    return {
+        "data": None,
+        "message": "Detail indicator deleted successfully"
     }
 
 # =========================
@@ -282,8 +570,39 @@ def delete_parameter(id: str, db: Session = Depends(get_db), admin=Depends(get_c
 def list_semesters(db: Session = Depends(get_db), admin=Depends(get_current_admin)):
     sems = db.query(Semester).all()
     return {
-        "data": sems,
+        "data": jsonable_encoder(sems),
         "message": "Semesters retrieved successfully"
+    }
+
+@router.get("/academic/semesters/{id}")
+def get_semester_detail(id: str, db: Session = Depends(get_db), admin=Depends(get_current_admin)):
+    sem = db.query(Semester).filter(Semester.id == id).first()
+    if not sem:
+        raise HTTPException(status_code=404, detail="Semester tidak ditemukan")
+    
+    # Get students performance summary (mocked or aggregated if possible)
+    # For now, let's just return the students list
+    students = db.query(Student).all()
+    student_list = []
+    for s in students:
+        student_list.append({
+            "id": str(s.id),
+            "name": s.name,
+            "k": 75, # Mocked for now, needs real aggregation logic later
+            "m": 80,
+            "s": 70
+        })
+
+    return {
+        "data": {
+            "semester": jsonable_encoder(sem),
+            "stats": {
+                "total_students": len(student_list),
+                "active_faculty": db.query(User).filter(User.role == 1).count()
+            },
+            "students": student_list
+        },
+        "message": "Semester detail retrieved"
     }
 
 @router.post("/academic/semesters")
@@ -293,15 +612,45 @@ def create_semester(data: SemesterCreate, db: Session = Depends(get_db), admin=D
     
     sem = Semester(**data.dict())
     db.add(sem)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=400, detail="Data semester konflik atau format salah")
     db.refresh(sem)
+    log_action(db, admin.get("sub"), "CREATE_SEMESTER", f"Created academic period: {sem.name}")
     return {
-        "data": sem,
+        "data": SemesterResponse.from_orm(sem),
         "message": "Semester created successfully"
     }
 
-@router.patch("/academic/semesters/{id}")
-def update_semester_status(id: str, is_active: bool, db: Session = Depends(get_db), admin=Depends(get_current_admin)):
+@router.put("/academic/semesters/{id}", summary="Update Full Semester Data")
+def update_semester(id: str, data: SemesterCreate, db: Session = Depends(get_db), admin=Depends(get_current_admin)):
+    sem = db.query(Semester).filter(Semester.id == id).first()
+    if not sem:
+        raise HTTPException(status_code=404, detail="Semester tidak ditemukan")
+    
+    # If this semester is being set to active, deactivate all others
+    if data.is_active and not sem.is_active:
+        db.query(Semester).filter(Semester.id != id).update({Semester.is_active: False})
+    
+    for key, value in data.dict().items():
+        setattr(sem, key, value)
+    
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=400, detail="Update semester konflik")
+    
+    db.refresh(sem)
+    return {
+        "data": jsonable_encoder(sem),
+        "message": "Semester updated successfully"
+    }
+
+@router.patch("/academic/semesters/{id}", summary="Quick Toggle Semester Status")
+def patch_semester(id: str, is_active: bool, db: Session = Depends(get_db), admin=Depends(get_current_admin)):
     sem = db.query(Semester).filter(Semester.id == id).first()
     if not sem:
         raise HTTPException(status_code=404, detail="Semester tidak ditemukan")
@@ -313,6 +662,317 @@ def update_semester_status(id: str, is_active: bool, db: Session = Depends(get_d
     db.commit()
     db.refresh(sem)
     return {
-        "data": sem,
-        "message": "Semester status updated successfully"
+        "data": jsonable_encoder(sem),
+        "message": "Semester status updated"
     }
+
+@router.get("/academic/semesters/{id}/performance/export", summary="Export Performance Data for 1 Semester")
+def export_semester_performance(id: str, db: Session = Depends(get_db), admin=Depends(get_current_admin)):
+    semester = db.query(Semester).filter(Semester.id == id).first()
+    if not semester:
+        raise HTTPException(status_code=404, detail="Semester tidak ditemukan")
+    
+    profiles = db.query(KMSProfile, Student).join(Student, KMSProfile.santri_id == Student.id).filter(KMSProfile.semester_id == id).all()
+    
+    export_data = []
+    for profile, student in profiles:
+        export_data.append({
+            "nis": student.nis,
+            "name": student.name,
+            "kelas": student.kelas,
+            "karakter": profile.karakter_score,
+            "mental": profile.mental_score,
+            "softskill": profile.softskill_score,
+            "overall": profile.overall_score,
+            "report_count": profile.report_count
+        })
+    
+    return {
+        "data": {
+            "semester_name": semester.name,
+            "records": export_data
+        },
+        "message": "Performance data exported successfully"
+    }
+
+@router.post("/academic/semesters/{id}/analyze-all", summary="Batch Analysis for All Students in Semester")
+def analyze_all_students(id: str, db: Session = Depends(get_db), admin=Depends(get_current_admin)):
+    semester = db.query(Semester).filter(Semester.id == id).first()
+    if not semester:
+        raise HTTPException(status_code=404, detail="Semester tidak ditemukan")
+    
+    # 1. Get all students
+    students = db.query(Student).filter(Student.is_active == True).all()
+    
+    processed_count = 0
+    for student in students:
+        # 2. Get all analyzed reports for this student in this semester
+        reports = db.query(Report).filter(
+            Report.santri_id == student.id,
+            Report.semester_id == id,
+            Report.status == "analyzed"
+        ).all()
+        
+        if not reports:
+            continue
+            
+        # 3. Aggregate Detections
+        # This logic mimics the profiling service
+        report_ids = [r.id for r in reports]
+        analyses = db.query(ReportAnalysis).filter(ReportAnalysis.report_id.in_(report_ids)).all()
+        analysis_ids = [a.id for a in analyses]
+        
+        detections = db.query(ReportParameterDetection).filter(
+            ReportParameterDetection.report_analysis_id.in_(analysis_ids)
+        ).all()
+        
+        # Simple count logic for scores (simulation)
+        gained_karakter = len([d for d in detections if d.status_detected == "gained" and db.query(KMSMainIndicator).filter(KMSMainIndicator.id == d.parameter_id, KMSMainIndicator.category == "karakter").first()])
+        gained_mental = len([d for d in detections if d.status_detected == "gained" and db.query(KMSMainIndicator).filter(KMSMainIndicator.id == d.parameter_id, KMSMainIndicator.category == "mental").first()])
+        gained_softskill = len([d for d in detections if d.status_detected == "gained" and db.query(KMSMainIndicator).filter(KMSMainIndicator.id == d.parameter_id, KMSMainIndicator.category == "softskill").first()])
+        
+        # Update Profile
+        profile = db.query(KMSProfile).filter(KMSProfile.santri_id == student.id, KMSProfile.semester_id == id).first()
+        if not profile:
+            profile = KMSProfile(santri_id=student.id, semester_id=id)
+            db.add(profile)
+            
+        profile.karakter_score = min(100.0, (gained_karakter / 40) * 100)
+        profile.mental_score = min(100.0, (gained_mental / 34) * 100)
+        profile.softskill_score = min(100.0, (gained_softskill / 14) * 100)
+        profile.overall_score = (profile.karakter_score + profile.mental_score + profile.softskill_score) / 3
+        profile.report_count = len(reports)
+        profile.last_updated = datetime.utcnow()
+        
+        processed_count += 1
+        
+    db.commit()
+    
+    return {
+        "data": {"processed_students": processed_count},
+        "message": f"Global analysis completed for {processed_count} students"
+    }
+
+@router.delete("/academic/semesters/{id}")
+def delete_semester(id: str, db: Session = Depends(get_db), admin=Depends(get_current_admin)):
+    sem = db.query(Semester).filter(Semester.id == id).first()
+    if not sem:
+        raise HTTPException(status_code=404, detail="Semester tidak ditemukan")
+    name = sem.name
+    db.delete(sem)
+    db.commit()
+    log_action(db, admin.get("sub"), "DELETE_SEMESTER", f"Removed academic period {name}")
+    return {
+        "data": None,
+        "message": "Semester deleted successfully"
+    }
+
+
+# =========================
+# 6. ANALISIS KUMULATIF (ADMIN)
+# =========================
+from app.services.analysis_service import run_analysis_for_student, format_full_snapshot
+from app.models.models import StudentAnalysisSnapshot
+from typing import Optional
+
+@router.post("/analyze/student/{santri_id}", summary="Admin: Analisis 1 Santri")
+def admin_analyze_student(
+    santri_id: str,
+    semester_id: str,
+    db: Session = Depends(get_db),
+    admin=Depends(get_current_admin)
+):
+    student = db.query(Student).filter(Student.id == santri_id).first()
+    if not student:
+        raise HTTPException(status_code=404, detail="Santri tidak ditemukan")
+
+    result = run_analysis_for_student(santri_id, semester_id, admin.get("sub"), db)
+    if "error" in result:
+        raise HTTPException(status_code=400, detail=result["error"])
+
+    log_action(db, admin.get("sub"), "ANALYZE_STUDENT",
+               f"Ran cumulative analysis for {student.name} (semester {semester_id[:8]})")
+    return {
+        "data": result,
+        "message": f"Analisis kumulatif untuk {student.name} berhasil."
+    }
+
+
+@router.post("/analyze/domain/{musyrif_id}", summary="Admin: Analisis Semua Santri 1 Domain Musyrif")
+def admin_analyze_domain(
+    musyrif_id: str,
+    semester_id: str,
+    db: Session = Depends(get_db),
+    admin=Depends(get_current_admin)
+):
+    musyrif = db.query(User).filter(User.id == musyrif_id, User.role == 1).first()
+    if not musyrif:
+        raise HTTPException(status_code=404, detail="Musyrif tidak ditemukan")
+
+    students = db.query(Student).filter(
+        Student.musyrif_id == musyrif_id,
+        Student.is_active == True
+    ).all()
+
+    results, errors = [], []
+    for student in students:
+        try:
+            res = run_analysis_for_student(str(student.id), semester_id, admin.get("sub"), db)
+            if "error" in res:
+                errors.append({"santri_id": str(student.id), "name": student.name, "error": res["error"]})
+            else:
+                results.append({"santri_id": str(student.id), "name": student.name, "snapshot_id": res["snapshot_id"]})
+        except Exception as e:
+            errors.append({"santri_id": str(student.id), "name": student.name, "error": str(e)})
+
+    log_action(db, admin.get("sub"), "ANALYZE_DOMAIN",
+               f"Batch analysis for domain {musyrif.name}: {len(results)} OK, {len(errors)} failed")
+    return {
+        "data": {"processed": len(results), "skipped": len(errors), "results": results, "errors": errors},
+        "message": f"Analisis domain {musyrif.name} selesai."
+    }
+
+
+@router.post("/analyze/all", summary="Admin: Analisis Semua Santri Aktif")
+def admin_analyze_all(
+    semester_id: str,
+    db: Session = Depends(get_db),
+    admin=Depends(get_current_admin)
+):
+    students = db.query(Student).filter(Student.is_active == True).all()
+    results, errors = [], []
+    for student in students:
+        try:
+            res = run_analysis_for_student(str(student.id), semester_id, admin.get("sub"), db)
+            if "error" in res:
+                errors.append({"santri_id": str(student.id), "name": student.name, "error": res["error"]})
+            else:
+                results.append({"santri_id": str(student.id), "name": student.name, "snapshot_id": res["snapshot_id"]})
+        except Exception as e:
+            errors.append({"santri_id": str(student.id), "name": student.name, "error": str(e)})
+
+    log_action(db, admin.get("sub"), "ANALYZE_ALL",
+               f"Global batch analysis: {len(results)} OK, {len(errors)} failed")
+    return {
+        "data": {"processed": len(results), "skipped": len(errors), "results": results, "errors": errors},
+        "message": f"Analisis global selesai: {len(results)} berhasil, {len(errors)} dilewati."
+    }
+
+
+# =========================
+# 7. HISTORY LAPORAN (ADMIN)
+# =========================
+@router.get("/history/reports/{santri_id}", summary="Admin: History Laporan Santri")
+def admin_get_report_history(
+    santri_id: str,
+    semester_id: Optional[str] = None,
+    from_date: Optional[str] = None,
+    to_date: Optional[str] = None,
+    page: int = 1,
+    size: int = 20,
+    db: Session = Depends(get_db),
+    admin=Depends(get_current_admin)
+):
+    from datetime import date as date_type
+    student = db.query(Student).filter(Student.id == santri_id).first()
+    if not student:
+        raise HTTPException(status_code=404, detail="Santri tidak ditemukan")
+
+    from sqlalchemy import desc as _desc
+    query = db.query(Report).filter(Report.santri_id == santri_id)
+    if semester_id:
+        query = query.filter(Report.semester_id == semester_id)
+    if from_date:
+        query = query.filter(Report.report_date >= date_type.fromisoformat(from_date))
+    if to_date:
+        query = query.filter(Report.report_date <= date_type.fromisoformat(to_date))
+
+    total = query.count()
+    reports = query.order_by(_desc(Report.report_date)).offset((page - 1) * size).limit(size).all()
+
+    items = [{
+        "id": str(r.id),
+        "date": r.report_date.isoformat() if r.report_date else None,
+        "status": r.status,
+        "transcript": r.transcript,
+        "semester_id": str(r.semester_id) if r.semester_id else None,
+        "musyrif_id": str(r.musyrif_id) if r.musyrif_id else None,
+        "created_at": r.created_at.isoformat() if r.created_at else None
+    } for r in reports]
+
+    return {
+        "data": {
+            "student_name": student.name,
+            "items": items,
+            "pagination": {"page": page, "size": size, "total": total, "total_pages": (total + size - 1) // size}
+        },
+        "message": f"History laporan {student.name} berhasil diambil."
+    }
+
+
+# =========================
+# 8. HISTORY ANALISIS (ADMIN)
+# =========================
+@router.get("/history/analysis/{santri_id}", summary="Admin: Daftar Snapshot Analisis Santri")
+def admin_get_analysis_history(
+    santri_id: str,
+    semester_id: Optional[str] = None,
+    page: int = 1,
+    size: int = 10,
+    db: Session = Depends(get_db),
+    admin=Depends(get_current_admin)
+):
+    student = db.query(Student).filter(Student.id == santri_id).first()
+    if not student:
+        raise HTTPException(status_code=404, detail="Santri tidak ditemukan")
+
+    query = db.query(StudentAnalysisSnapshot).filter(StudentAnalysisSnapshot.santri_id == santri_id)
+    if semester_id:
+        query = query.filter(StudentAnalysisSnapshot.semester_id == semester_id)
+
+    total = query.count()
+    snapshots = query.order_by(StudentAnalysisSnapshot.performed_at.desc()).offset((page - 1) * size).limit(size).all()
+
+    items = [{
+        "snapshot_id": str(s.id),
+        "performed_at": s.performed_at.isoformat(),
+        "performed_by": str(s.performed_by) if s.performed_by else None,
+        "semester_id": str(s.semester_id),
+        "reports_included": s.reports_included,
+        "scores": {
+            "karakter": s.karakter_score,
+            "mental": s.mental_score,
+            "softskill": s.softskill_score,
+            "overall": s.overall_score
+        }
+    } for s in snapshots]
+
+    return {
+        "data": {
+            "student_name": student.name,
+            "items": items,
+            "pagination": {"page": page, "size": size, "total": total, "total_pages": (total + size - 1) // size}
+        },
+        "message": "Daftar snapshot analisis berhasil diambil."
+    }
+
+
+@router.get("/history/analysis/{santri_id}/{snapshot_id}", summary="Admin: Detail Lengkap 1 Snapshot Analisis")
+def admin_get_analysis_detail(
+    santri_id: str,
+    snapshot_id: str,
+    db: Session = Depends(get_db),
+    admin=Depends(get_current_admin)
+):
+    snapshot = db.query(StudentAnalysisSnapshot).filter(
+        StudentAnalysisSnapshot.id == snapshot_id,
+        StudentAnalysisSnapshot.santri_id == santri_id
+    ).first()
+    if not snapshot:
+        raise HTTPException(status_code=404, detail="Snapshot tidak ditemukan")
+
+    return {
+        "data": format_full_snapshot(snapshot),
+        "message": "Detail snapshot berhasil diambil."
+    }
+

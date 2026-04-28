@@ -8,9 +8,12 @@ class SantriBase(BaseModel):
     name: str
     kelas: str
     angkatan: int
+    birth_info: Optional[str] = None
+    address: Optional[str] = None
+    guardian_name: Optional[str] = None
     gender: Optional[str] = None
-    date_of_birth: Optional[date] = None
     photo_url: Optional[str] = None
+    musyrif_id: Optional[UUID] = None
     is_active: bool = True
 
 class SantriCreate(SantriBase):
@@ -21,9 +24,12 @@ class SantriUpdate(BaseModel):
     name: Optional[str] = None
     kelas: Optional[str] = None
     angkatan: Optional[int] = None
+    birth_info: Optional[str] = None
+    address: Optional[str] = None
+    guardian_name: Optional[str] = None
     gender: Optional[str] = None
-    date_of_birth: Optional[date] = None
     photo_url: Optional[str] = None
+    musyrif_id: Optional[UUID] = None
     is_active: Optional[bool] = None
 
 class SantriResponse(SantriBase):

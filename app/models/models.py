@@ -55,7 +55,7 @@ class User(Base):
 
 
 # ================= SANTRI =================
-class Student(Base): # Keep class name Student for compatibility with my previous route fixes, but change table to santri
+class Student(Base): # Keep class name Student for compatibility
     __tablename__ = "santri"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -64,15 +64,21 @@ class Student(Base): # Keep class name Student for compatibility with my previou
     kelas = Column(String)
     angkatan = Column(Integer)
     
-    # Tambahan profil
-    date_of_birth = Column(Date, nullable=True)
+    # Profile & Biodata
+    birth_info = Column(String, nullable=True) # e.g. "Jakarta, 12 Mei 2005"
+    address = Column(Text, nullable=True)
+    guardian_name = Column(String, nullable=True)
     gender = Column(String, nullable=True)
     photo_url = Column(String, nullable=True)
+    
+    # Relationship with Musyrif
+    musyrif_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
     
     is_active = Column(Boolean, default=True)
     created_at = Column(TIMESTAMP, default=datetime.utcnow)
 
     reports = relationship("Report", back_populates="santri")
+    musyrif = relationship("User")
 
 
 # ================= SEMESTERS =================
@@ -92,20 +98,32 @@ class Semester(Base):
 
 
 # ================= KMS PARAMETERS (MASTER) =================
-class KMSParameter(Base):
-    __tablename__ = "kms_parameters"
+class KMSMainIndicator(Base):
+    __tablename__ = "kms_main_indicators"
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     category = Column(String) # karakter, mental, softskill
     theme = Column(String)
     name = Column(String)
     description = Column(Text)
+    weight = Column(Float, default=1.0)
+    
+    details = relationship("KMSDetailIndicator", back_populates="main_indicator", cascade="all, delete-orphan")
+
+class KMSDetailIndicator(Base):
+    __tablename__ = "kms_detail_indicators"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    main_indicator_id = Column(UUID(as_uuid=True), ForeignKey("kms_main_indicators.id", ondelete="CASCADE"))
+    indicator_detail = Column(Text)
+    action_template = Column(Text, nullable=True)  # Panduan tindakan musyrif, di-generate otomatis
+
+    main_indicator = relationship("KMSMainIndicator", back_populates="details")
 
 # ================= STUDENT ACHIEVEMENT (CURRENT STATE) =================
 class StudentAchievement(Base):
     __tablename__ = "student_achievements"
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    santri_id = Column(UUID(as_uuid=True), ForeignKey("santri.id"))
-    parameter_id = Column(UUID(as_uuid=True), ForeignKey("kms_parameters.id"))
+    santri_id = Column(UUID(as_uuid=True), ForeignKey("santri.id", ondelete="CASCADE"))
+    parameter_id = Column(UUID(as_uuid=True), ForeignKey("kms_main_indicators.id", ondelete="CASCADE"))
     status = Column(String, default="undefined") # undefined, gained, negative
     evidence_excerpt = Column(Text, nullable=True)
     last_updated = Column(TIMESTAMP, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -116,7 +134,7 @@ class Report(Base):
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     musyrif_id = Column(UUID(as_uuid=True), ForeignKey("users.id"))
-    santri_id = Column(UUID(as_uuid=True), ForeignKey("santri.id"))
+    santri_id = Column(UUID(as_uuid=True), ForeignKey("santri.id", ondelete="CASCADE"))
     semester_id = Column(UUID(as_uuid=True), ForeignKey("semesters.id"))
 
     report_date = Column(Date)
@@ -134,7 +152,7 @@ class ReportAnalysis(Base):
     __tablename__ = "report_analyses"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    report_id = Column(UUID(as_uuid=True), ForeignKey("reports.id"))
+    report_id = Column(UUID(as_uuid=True), ForeignKey("reports.id", ondelete="CASCADE"))
 
     insight = Column(Text, nullable=True)
     recommendation = Column(Text, nullable=True)
@@ -151,8 +169,8 @@ class ReportAnalysis(Base):
 class ReportParameterDetection(Base):
     __tablename__ = "report_parameter_detections"
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    report_analysis_id = Column(UUID(as_uuid=True), ForeignKey("report_analyses.id"))
-    parameter_id = Column(UUID(as_uuid=True), ForeignKey("kms_parameters.id"))
+    report_analysis_id = Column(UUID(as_uuid=True), ForeignKey("report_analyses.id", ondelete="CASCADE"))
+    detail_parameter_id = Column(UUID(as_uuid=True), ForeignKey("kms_detail_indicators.id"))
     status_detected = Column(String) # gained, negative
     evidence = Column(Text)
 
@@ -163,7 +181,7 @@ class KMSProfile(Base):
     __tablename__ = "kms_profiles"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    santri_id = Column(UUID(as_uuid=True), ForeignKey("santri.id"))
+    santri_id = Column(UUID(as_uuid=True), ForeignKey("santri.id", ondelete="CASCADE"))
     semester_id = Column(UUID(as_uuid=True), ForeignKey("semesters.id"))
 
     karakter_score = Column(Float, default=0.0) # (gained / 40) * 100
@@ -179,9 +197,9 @@ class Treatment(Base):
     __tablename__ = "treatments"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    santri_id = Column(UUID(as_uuid=True), ForeignKey("santri.id"))
+    santri_id = Column(UUID(as_uuid=True), ForeignKey("santri.id", ondelete="CASCADE"))
     semester_id = Column(UUID(as_uuid=True), ForeignKey("semesters.id"))
-    generated_from_report = Column(UUID(as_uuid=True), ForeignKey("reports.id"))
+    generated_from_report = Column(UUID(as_uuid=True), ForeignKey("reports.id", ondelete="CASCADE"))
 
     recommendation = Column(Text)
     priority = Column(String, default="medium")
@@ -190,4 +208,81 @@ class Treatment(Base):
 
     created_at = Column(TIMESTAMP, default=datetime.utcnow)
     updated_at = Column(TIMESTAMP, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+# ================= ACTIVITY LOGS =================
+class ActivityLog(Base):
+    __tablename__ = "activity_logs"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
+    user_name = Column(String) # Redundant but faster for display
+    action = Column(String) # e.g. CREATE_STUDENT, UPDATE_KMS, DELETE_MUSYRIF
+    detail = Column(Text)
+    created_at = Column(TIMESTAMP, default=datetime.utcnow)
+
+# ================= CUMULATIVE ANALYSIS SNAPSHOTS =================
+class StudentAnalysisSnapshot(Base):
+    """
+    Satu record per run analisis kumulatif. Data lama tidak dihapus, hanya ditambah.
+    Menyimpan skor, insight, treatment, dan list indikator yang terdeteksi.
+    """
+    __tablename__ = "student_analysis_snapshots"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    santri_id = Column(UUID(as_uuid=True), ForeignKey("santri.id", ondelete="CASCADE"))
+    semester_id = Column(UUID(as_uuid=True), ForeignKey("semesters.id"))
+    performed_by = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
+    performed_at = Column(TIMESTAMP, default=datetime.utcnow)
+
+    # Cakupan laporan yang diproses dalam run ini
+    reports_included = Column(Integer, default=0)
+    analyzed_up_to = Column(TIMESTAMP, nullable=True)  # timestamp laporan terbaru yang diproses
+
+    # Skor
+    karakter_score = Column(Float, default=0.0)
+    mental_score = Column(Float, default=0.0)
+    softskill_score = Column(Float, default=0.0)
+    overall_score = Column(Float, default=0.0)
+
+    # Hitungan detail (untuk transparansi)
+    karakter_achieved = Column(Integer, default=0)
+    karakter_total = Column(Integer, default=0)
+    mental_achieved = Column(Integer, default=0)
+    mental_total = Column(Integer, default=0)
+    softskill_achieved = Column(Integer, default=0)
+    softskill_total = Column(Integer, default=0)
+
+    # Hasil narasi
+    insight = Column(Text, nullable=True)
+
+    # Treatment: JSON string → list of {detail_id, detail_text, main_name, main_id}
+    treatment_k = Column(Text, nullable=True)
+    treatment_m = Column(Text, nullable=True)
+    treatment_s = Column(Text, nullable=True)
+
+    # Relations
+    detected_indicators = relationship(
+        "SnapshotDetection",
+        back_populates="snapshot",
+        cascade="all, delete-orphan"
+    )
+    santri = relationship("Student")
+    performer = relationship("User", foreign_keys=[performed_by])
+
+
+class SnapshotDetection(Base):
+    """
+    Indikator detail yang berhasil terdeteksi dalam satu run analisis.
+    Hanya menyimpan deteksi BARU pada run ini (bukan kumulatif ulang).
+    """
+    __tablename__ = "snapshot_detections"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    snapshot_id = Column(UUID(as_uuid=True), ForeignKey("student_analysis_snapshots.id", ondelete="CASCADE"))
+    main_indicator_id = Column(UUID(as_uuid=True), ForeignKey("kms_main_indicators.id"))
+    detail_indicator_id = Column(UUID(as_uuid=True), ForeignKey("kms_detail_indicators.id"))
+    evidence_excerpt = Column(Text, nullable=True)
+
+    snapshot = relationship("StudentAnalysisSnapshot", back_populates="detected_indicators")
+    main_indicator = relationship("KMSMainIndicator")
+    detail_indicator = relationship("KMSDetailIndicator")
 
