@@ -6,6 +6,7 @@ from datetime import datetime
 from sqlalchemy import Column, String, Integer, Text, Date, TIMESTAMP, ForeignKey, Boolean, Float, CheckConstraint
 from sqlalchemy.dialects.postgresql import UUID, ENUM
 from sqlalchemy.orm import relationship
+from sqlalchemy import UniqueConstraint
 from app.database import Base
 
 
@@ -286,3 +287,54 @@ class SnapshotDetection(Base):
     main_indicator = relationship("KMSMainIndicator")
     detail_indicator = relationship("KMSDetailIndicator")
 
+# ================= ACADEMIC CLASS =================
+class AcademicClass(Base):
+    __tablename__ = "academic_classes"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    name = Column(String)  # contoh: "QCB Kelas 2"
+    
+    semester_id = Column(UUID(as_uuid=True), ForeignKey("semesters.id", ondelete="CASCADE"))
+    
+    created_at = Column(TIMESTAMP, default=datetime.utcnow)
+
+    semester = relationship("Semester")
+    students = relationship("ClassStudent", back_populates="kelas", cascade="all, delete")
+
+    # ================= CLASS STUDENT =================
+class ClassStudent(Base):
+    __tablename__ = "class_students"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    
+    class_id = Column(UUID(as_uuid=True), ForeignKey("academic_classes.id", ondelete="CASCADE"))
+    student_id = Column(UUID(as_uuid=True), ForeignKey("santri.id", ondelete="CASCADE"))
+
+    kelas = relationship("AcademicClass", back_populates="students")
+    student = relationship("Student")
+
+    # ================= STUDENT GRADES =================
+class StudentGrade(Base):
+    __tablename__ = "student_grades"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+
+    student_id = Column(UUID(as_uuid=True), ForeignKey("santri.id", ondelete="CASCADE"))
+    class_id = Column(UUID(as_uuid=True), ForeignKey("academic_classes.id", ondelete="CASCADE"))
+    semester_id = Column(UUID(as_uuid=True), ForeignKey("semesters.id", ondelete="CASCADE"))
+
+    nh = Column(Float, default=0.0)
+    nb = Column(Float, default=0.0)
+    na = Column(Float, default=0.0)
+
+    created_at = Column(TIMESTAMP, default=datetime.utcnow)
+    updated_at = Column(TIMESTAMP, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # 🔥 WAJIB (biar bisa UPSERT)
+    __table_args__ = (
+        UniqueConstraint("student_id", "class_id", "semester_id", name="uq_student_grade"),
+    )
+
+    student = relationship("Student")
+    kelas = relationship("AcademicClass")
+    semester = relationship("Semester")

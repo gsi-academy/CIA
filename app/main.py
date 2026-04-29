@@ -7,6 +7,8 @@ from app.models import models
 from app.routes.auth import router as auth_router
 from app.routes.admin import router as admin_router
 from app.routes.user import router as user_router
+from app.routes.academic import router as academic_router
+
 from app.database import Base, engine
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -51,6 +53,7 @@ API_PREFIX = "/api/v1"
 app.include_router(auth_router, prefix=API_PREFIX)
 app.include_router(admin_router, prefix=API_PREFIX)
 app.include_router(user_router, prefix=API_PREFIX)
+app.include_router(academic_router, prefix=API_PREFIX)
 
 app.add_middleware(
     CORSMiddleware,
