@@ -4,7 +4,7 @@ from datetime import datetime
 from uuid import UUID
 
 class TreatmentBase(BaseModel):
-    santri_id: UUID
+    student_id: UUID
     semester_id: UUID
     generated_from_report: Optional[UUID] = None
     recommendation: str

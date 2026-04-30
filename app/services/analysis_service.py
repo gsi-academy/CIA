@@ -1,6 +1,6 @@
 """
 analysis_service.py
-Shared logic untuk analisis kumulatif profiling santri.
+Shared logic untuk analisis kumulatif profiling student.
 Digunakan oleh routes/user.py dan routes/admin.py.
 """
 
@@ -11,18 +11,18 @@ from sqlalchemy.orm import Session
 
 from app.models.models import (
     Student, Report, KMSMainIndicator, KMSDetailIndicator,
-    StudentAnalysisSnapshot, SnapshotDetection, StudentAchievement, KMSProfile
+    StudentAnalysisSnapshot, SnapshotDetection, StudentAchievement, KMSProfile, ReportStatus
 )
 
 
 def run_analysis_for_student(
-    santri_id: str,
+    student_id: str,
     semester_id: str,
     performer_id: Optional[str],
     db: Session
 ) -> dict:
     """
-    Jalankan analisis kumulatif untuk satu santri dalam satu semester.
+    Jalankan analisis kumulatif untuk satu student dalam satu semester.
     Mengembalikan dict hasil snapshot yang baru dibuat.
     """
 
@@ -30,22 +30,23 @@ def run_analysis_for_student(
     prev_snapshot = (
         db.query(StudentAnalysisSnapshot)
         .filter(
-            StudentAnalysisSnapshot.santri_id == santri_id,
+            StudentAnalysisSnapshot.student_id == student_id,
             StudentAnalysisSnapshot.semester_id == semester_id
         )
         .order_by(StudentAnalysisSnapshot.performed_at.desc())
         .first()
     )
 
-    # Kumpulkan detail_indicator_id yang sudah terdeteksi sebelumnya
-    prev_detected_detail_ids: set = set()
-    if prev_snapshot:
-        for det in prev_snapshot.detected_indicators:
-            prev_detected_detail_ids.add(str(det.detail_indicator_id))
+    # Kumpulkan detail_indicator_id yang sudah terdeteksi sebelumnya dari seluruh riwayat
+    all_past_detections = db.query(SnapshotDetection).join(StudentAnalysisSnapshot).filter(
+        StudentAnalysisSnapshot.student_id == student_id,
+        StudentAnalysisSnapshot.semester_id == semester_id
+    ).all()
+    prev_detected_detail_ids: set = {str(d.detail_indicator_id) for d in all_past_detections}
 
     # ── 2. Ambil laporan baru yang belum dianalisis ───────────────────────────
     report_query = db.query(Report).filter(
-        Report.santri_id == santri_id,
+        Report.student_id == student_id,
         Report.semester_id == semester_id
     )
     if prev_snapshot and prev_snapshot.analyzed_up_to:
@@ -56,7 +57,7 @@ def run_analysis_for_student(
     new_reports = report_query.order_by(Report.created_at.asc()).all()
 
     if not new_reports and not prev_snapshot:
-        return {"error": "Belum ada laporan untuk santri ini di semester terpilih."}
+        return {"error": "Belum ada laporan untuk student ini di semester terpilih."}
 
     # Gabungkan transcript laporan baru
     combined_transcript = " ".join(
@@ -85,6 +86,18 @@ def run_analysis_for_student(
             end = min(len(combined_transcript), idx + len(keyword) + 40)
             evidence = "..." + combined_transcript[start:end].strip() + "..."
             newly_detected.append((det, evidence))
+
+    # ── 4.1. Dummy Detection (Temporary for UI demonstration) ────────────────
+    if not newly_detected and combined_transcript:
+        import random
+        # Ambil indikator yang belum pernah terdeteksi sebelumnya
+        candidates = [d for d in all_details if str(d.id) not in prev_detected_detail_ids]
+        if candidates:
+            # Ambil secara acak 2-4 indikator dummy
+            num_dummy = min(len(candidates), random.randint(2, 4))
+            dummies = random.sample(candidates, num_dummy)
+            for d in dummies:
+                newly_detected.append((d, f"[DUMMY] Terdeteksi dari analisis pola {d.main_indicator.category}."))
 
     # ── 5. Gabungkan semua deteksi (lama + baru) ─────────────────────────────
     all_detected_detail_ids: set = prev_detected_detail_ids | {
@@ -146,8 +159,8 @@ def run_analysis_for_student(
     unachieved_s = get_unachieved("softskill")
 
     # ── 9. Panggil AI — generate treatment yang dipersonalisasi ───────────────
-    # AI menerima transcript santri + indikator yang belum tercapai,
-    # lalu generate kalimat tindakan yang disesuaikan kondisi santri.
+    # AI menerima transcript student + indikator yang belum tercapai,
+    # lalu generate kalimat tindakan yang disesuaikan kondisi student.
     from app.core.ai_engine import generate_treatment
 
     ai_actions = generate_treatment(
@@ -187,7 +200,7 @@ def run_analysis_for_student(
 
     # ── 10. Simpan Snapshot ───────────────────────────────────────────────────
     snapshot = StudentAnalysisSnapshot(
-        santri_id=santri_id,
+        student_id=student_id,
         semester_id=semester_id,
         performed_by=performer_id,
         performed_at=datetime.utcnow(),
@@ -224,12 +237,12 @@ def run_analysis_for_student(
     for main in all_mains:
         status = "gained" if str(main.id) in achieved_main_ids else "undefined"
         ach = db.query(StudentAchievement).filter(
-            StudentAchievement.santri_id == santri_id,
+            StudentAchievement.student_id == student_id,
             StudentAchievement.parameter_id == main.id
         ).first()
         if not ach:
             ach = StudentAchievement(
-                santri_id=santri_id,
+                student_id=student_id,
                 parameter_id=main.id,
                 status=status
             )
@@ -240,11 +253,11 @@ def run_analysis_for_student(
 
     # Update KMSProfile (current score)
     profile = db.query(KMSProfile).filter(
-        KMSProfile.santri_id == santri_id,
+        KMSProfile.student_id == student_id,
         KMSProfile.semester_id == semester_id
     ).first()
     if not profile:
-        profile = KMSProfile(santri_id=santri_id, semester_id=semester_id)
+        profile = KMSProfile(student_id=student_id, semester_id=semester_id)
         db.add(profile)
 
     profile.karakter_score = cat_data["karakter"]["score"]
@@ -253,73 +266,71 @@ def run_analysis_for_student(
     profile.overall_score = overall_score
     profile.last_updated = datetime.utcnow()
 
+    # Update status report yang baru saja dianalisis
+    for r in new_reports:
+        r.status = ReportStatus.analyzed
+
     db.commit()
     db.refresh(snapshot)
 
     # ── 11. Bangun Response ───────────────────────────────────────────────────
-    return _build_snapshot_response(snapshot, all_detected_detail_ids, newly_detected, cat_data)
+    return format_full_snapshot(snapshot, db)
 
 
-def _build_snapshot_response(
-    snapshot: StudentAnalysisSnapshot,
-    all_detected_detail_ids: set,
-    newly_detected: list,
-    cat_data: dict
-) -> dict:
-    """Format response snapshot analisis."""
-    return {
-        "snapshot_id": str(snapshot.id),
-        "performed_at": snapshot.performed_at.isoformat(),
-        "reports_included": snapshot.reports_included,
-        "newly_detected_count": len(newly_detected),
-        "scores": {
-            "karakter": {
-                "score": snapshot.karakter_score,
-                "achieved": snapshot.karakter_achieved,
-                "total": snapshot.karakter_total
-            },
-            "mental": {
-                "score": snapshot.mental_score,
-                "achieved": snapshot.mental_achieved,
-                "total": snapshot.mental_total
-            },
-            "softskill": {
-                "score": snapshot.softskill_score,
-                "achieved": snapshot.softskill_achieved,
-                "total": snapshot.softskill_total
-            },
-            "overall": snapshot.overall_score
-        },
-        "insight": snapshot.insight,
-        "treatment": {
-            "karakter": json.loads(snapshot.treatment_k or "[]"),
-            "mental": json.loads(snapshot.treatment_m or "[]"),
-            "softskill": json.loads(snapshot.treatment_s or "[]")
-        },
-        "newly_detected_indicators": [
-            {
-                "main_id": str(d.main_indicator_id),
-                "detail_id": str(d.id),
-                "detail_text": d.indicator_detail,
-                "evidence": ev
-            }
-            for d, ev in newly_detected
-        ]
-    }
 
 
-def format_full_snapshot(snapshot: StudentAnalysisSnapshot) -> dict:
-    """Format snapshot untuk endpoint history analisis."""
-    all_detections = []
+
+def format_full_snapshot(snapshot: StudentAnalysisSnapshot, db: Session) -> dict:
+
+    
+    # 1. Ambil SEMUA main indicators yang tercapai
+    achieved_mains = db.query(StudentAchievement, KMSMainIndicator).join(
+        KMSMainIndicator, StudentAchievement.parameter_id == KMSMainIndicator.id
+    ).filter(
+        StudentAchievement.student_id == snapshot.student_id,
+        StudentAchievement.status == "gained"
+    ).all()
+    
+    achieved_main_indicators = [
+        {
+            "id": str(main.id),
+            "name": main.name,
+            "category": main.category
+        }
+        for ach, main in achieved_mains
+    ]
+
+    # 2. Ambil SEMUA detail indicators yang pernah terdeteksi
+    all_past_detections = db.query(SnapshotDetection).join(StudentAnalysisSnapshot).filter(
+        StudentAnalysisSnapshot.student_id == snapshot.student_id,
+        StudentAnalysisSnapshot.performed_at <= snapshot.performed_at
+    ).all()
+    
+    detected_details = []
+    seen_detail_ids = set()
+    
+    # Tambahkan yang baru di snapshot ini (dengan flag is_new)
     for det in snapshot.detected_indicators:
-        all_detections.append({
-            "main_id": str(det.main_indicator_id),
-            "main_name": det.main_indicator.name if det.main_indicator else None,
-            "main_category": det.main_indicator.category if det.main_indicator else None,
+        detected_details.append({
             "detail_id": str(det.detail_indicator_id),
             "detail_text": det.detail_indicator.indicator_detail if det.detail_indicator else None,
-            "evidence": det.evidence_excerpt
+            "main_category": det.main_indicator.category if det.main_indicator else None,
+            "evidence": det.evidence_excerpt,
+            "is_new": True
         })
+        seen_detail_ids.add(str(det.detail_indicator_id))
+
+    # Tambahkan sisanya (historical)
+    for det in all_past_detections:
+        if str(det.detail_indicator_id) not in seen_detail_ids:
+            detected_details.append({
+                "detail_id": str(det.detail_indicator_id),
+                "detail_text": det.detail_indicator.indicator_detail if det.detail_indicator else None,
+                "main_category": det.main_indicator.category if det.main_indicator else None,
+                "evidence": det.evidence_excerpt,
+                "is_new": False
+            })
+            seen_detail_ids.add(str(det.detail_indicator_id))
 
     return {
         "snapshot_id": str(snapshot.id),
@@ -351,5 +362,6 @@ def format_full_snapshot(snapshot: StudentAnalysisSnapshot) -> dict:
             "mental": json.loads(snapshot.treatment_m or "[]"),
             "softskill": json.loads(snapshot.treatment_s or "[]")
         },
-        "detected_indicators": all_detections
+        "achieved_main_indicators": achieved_main_indicators,
+        "detected_indicators": detected_details
     }

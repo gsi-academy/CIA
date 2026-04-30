@@ -32,7 +32,7 @@ def process_ai(report_id: str):
         db.commit()
         db.refresh(analysis)
 
-        # 3. Simpan Detections & Update Achievements (State Santri)
+        # 3. Simpan Detections & Update Achievements (State Student)
         detections = result.get("detections", [])
         for det in detections:
             detail_param = db.query(KMSDetailIndicator).filter(
@@ -50,13 +50,13 @@ def process_ai(report_id: str):
                 # Update State Achievement
                 main_param = detail_param.main_indicator
                 achievement = db.query(StudentAchievement).filter(
-                    StudentAchievement.santri_id == report.santri_id,
+                    StudentAchievement.student_id == report.student_id,
                     StudentAchievement.parameter_id == main_param.id
                 ).first()
 
                 if not achievement:
                     achievement = StudentAchievement(
-                        santri_id=report.santri_id,
+                        student_id=report.student_id,
                         parameter_id=main_param.id,
                         status=det["status"],
                         evidence_excerpt=det["evidence"]
@@ -73,7 +73,7 @@ def process_ai(report_id: str):
         # Setiap laporan baru masuk, kita refresh skor dan treatment terbaru
         from app.services.analysis_service import run_analysis_for_student
         run_analysis_for_student(
-            santri_id=str(report.santri_id),
+            student_id=str(report.student_id),
             semester_id=str(report.semester_id),
             performer_id=str(report.musyrif_id),
             db=db

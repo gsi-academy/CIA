@@ -3,7 +3,7 @@ from typing import Optional
 from datetime import date, datetime
 from uuid import UUID
 
-class SantriBase(BaseModel):
+class StudentBase(BaseModel):
     nis: str
     name: str
     kelas: str
@@ -16,10 +16,10 @@ class SantriBase(BaseModel):
     musyrif_id: Optional[UUID] = None
     is_active: bool = True
 
-class SantriCreate(SantriBase):
+class StudentCreate(StudentBase):
     pass
 
-class SantriUpdate(BaseModel):
+class StudentUpdate(BaseModel):
     nis: Optional[str] = None
     name: Optional[str] = None
     kelas: Optional[str] = None
@@ -32,7 +32,7 @@ class SantriUpdate(BaseModel):
     musyrif_id: Optional[UUID] = None
     is_active: Optional[bool] = None
 
-class SantriResponse(SantriBase):
+class StudentResponse(StudentBase):
     id: UUID
     created_at: datetime
 

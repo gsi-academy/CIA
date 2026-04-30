@@ -20,3 +20,16 @@ class SemesterResponse(SemesterBase):
 
     class Config:
         from_attributes = True
+
+class AcademicClassBase(BaseModel):
+    name: str
+
+class AcademicClassCreate(AcademicClassBase):
+    pass
+
+class AcademicClassResponse(AcademicClassBase):
+    id: UUID
+    semester_id: UUID
+
+    class Config:
+        from_attributes = True

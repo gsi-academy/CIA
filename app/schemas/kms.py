@@ -40,7 +40,7 @@ KMSParamResponse = KMSIndicatorResponse
 
 # ================= STUDENT ACHIEVEMENT =================
 class AchievementBase(BaseModel):
-    santri_id: UUID
+    student_id: UUID
     parameter_id: UUID
     status: str = "undefined"
     evidence_excerpt: Optional[str] = None
@@ -55,7 +55,7 @@ class AchievementResponse(AchievementBase):
 # ================= KMS PROFILE =================
 class KMSProfileResponse(BaseModel):
     id: UUID
-    santri_id: UUID
+    student_id: UUID
     semester_id: UUID
     karakter_score: float
     mental_score: float

@@ -3,13 +3,14 @@ from typing import Optional, List
 from uuid import UUID
 
 class ReportSubmit(BaseModel):
-    santri_id: str
+    student_id: str
     semester_id: str
-    transcript: str = Field(..., min_length=10)
+    transcript: str
+    run_analysis: bool = False
 
 
 class ReportVerify(BaseModel):
-    text: Optional[str] = None
+    text: str
 
 
 class ReportResponse(BaseModel):
@@ -38,7 +39,7 @@ class AnalysisResponse(BaseModel):
 
 
 class DashboardResponse(BaseModel):
-    santri_id: str
+    student_id: str
     total_reports: int
     average_score: float
     trend: str
@@ -47,6 +48,6 @@ class DashboardResponse(BaseModel):
 
 
 class ExportResponse(BaseModel):
-    santri: dict
+    student: dict
     summary: dict
     treatments: list

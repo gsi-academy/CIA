@@ -55,9 +55,9 @@ class User(Base):
     reports = relationship("Report", back_populates="musyrif")
 
 
-# ================= SANTRI =================
+# ================= STUDENTS =================
 class Student(Base): # Keep class name Student for compatibility
-    __tablename__ = "santri"
+    __tablename__ = "students"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     nis = Column(String, unique=True)
@@ -78,7 +78,7 @@ class Student(Base): # Keep class name Student for compatibility
     is_active = Column(Boolean, default=True)
     created_at = Column(TIMESTAMP, default=datetime.utcnow)
 
-    reports = relationship("Report", back_populates="santri")
+    reports = relationship("Report", back_populates="student")
     musyrif = relationship("User")
 
 
@@ -123,7 +123,7 @@ class KMSDetailIndicator(Base):
 class StudentAchievement(Base):
     __tablename__ = "student_achievements"
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    santri_id = Column(UUID(as_uuid=True), ForeignKey("santri.id", ondelete="CASCADE"))
+    student_id = Column(UUID(as_uuid=True), ForeignKey("students.id", ondelete="CASCADE"))
     parameter_id = Column(UUID(as_uuid=True), ForeignKey("kms_main_indicators.id", ondelete="CASCADE"))
     status = Column(String, default="undefined") # undefined, gained, negative
     evidence_excerpt = Column(Text, nullable=True)
@@ -135,7 +135,7 @@ class Report(Base):
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     musyrif_id = Column(UUID(as_uuid=True), ForeignKey("users.id"))
-    santri_id = Column(UUID(as_uuid=True), ForeignKey("santri.id", ondelete="CASCADE"))
+    student_id = Column(UUID(as_uuid=True), ForeignKey("students.id", ondelete="CASCADE"))
     semester_id = Column(UUID(as_uuid=True), ForeignKey("semesters.id"))
 
     report_date = Column(Date)
@@ -145,7 +145,7 @@ class Report(Base):
     created_at = Column(TIMESTAMP, default=datetime.utcnow)
 
     musyrif = relationship("User", back_populates="reports")
-    santri = relationship("Student", back_populates="reports")
+    student = relationship("Student", back_populates="reports")
     analysis = relationship("ReportAnalysis", back_populates="report", uselist=False)
 
 # ================= ANALYSIS =================
@@ -182,7 +182,7 @@ class KMSProfile(Base):
     __tablename__ = "kms_profiles"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    santri_id = Column(UUID(as_uuid=True), ForeignKey("santri.id", ondelete="CASCADE"))
+    student_id = Column(UUID(as_uuid=True), ForeignKey("students.id", ondelete="CASCADE"))
     semester_id = Column(UUID(as_uuid=True), ForeignKey("semesters.id"))
 
     karakter_score = Column(Float, default=0.0) # (gained / 40) * 100
@@ -198,7 +198,7 @@ class Treatment(Base):
     __tablename__ = "treatments"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    santri_id = Column(UUID(as_uuid=True), ForeignKey("santri.id", ondelete="CASCADE"))
+    student_id = Column(UUID(as_uuid=True), ForeignKey("students.id", ondelete="CASCADE"))
     semester_id = Column(UUID(as_uuid=True), ForeignKey("semesters.id"))
     generated_from_report = Column(UUID(as_uuid=True), ForeignKey("reports.id", ondelete="CASCADE"))
 
@@ -229,7 +229,7 @@ class StudentAnalysisSnapshot(Base):
     __tablename__ = "student_analysis_snapshots"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    santri_id = Column(UUID(as_uuid=True), ForeignKey("santri.id", ondelete="CASCADE"))
+    student_id = Column(UUID(as_uuid=True), ForeignKey("students.id", ondelete="CASCADE"))
     semester_id = Column(UUID(as_uuid=True), ForeignKey("semesters.id"))
     performed_by = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
     performed_at = Column(TIMESTAMP, default=datetime.utcnow)
@@ -266,7 +266,7 @@ class StudentAnalysisSnapshot(Base):
         back_populates="snapshot",
         cascade="all, delete-orphan"
     )
-    santri = relationship("Student")
+    student = relationship("Student")
     performer = relationship("User", foreign_keys=[performed_by])
 
 
@@ -308,7 +308,7 @@ class ClassStudent(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     
     class_id = Column(UUID(as_uuid=True), ForeignKey("academic_classes.id", ondelete="CASCADE"))
-    student_id = Column(UUID(as_uuid=True), ForeignKey("santri.id", ondelete="CASCADE"))
+    student_id = Column(UUID(as_uuid=True), ForeignKey("students.id", ondelete="CASCADE"))
 
     kelas = relationship("AcademicClass", back_populates="students")
     student = relationship("Student")
@@ -319,7 +319,7 @@ class StudentGrade(Base):
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
 
-    student_id = Column(UUID(as_uuid=True), ForeignKey("santri.id", ondelete="CASCADE"))
+    student_id = Column(UUID(as_uuid=True), ForeignKey("students.id", ondelete="CASCADE"))
     class_id = Column(UUID(as_uuid=True), ForeignKey("academic_classes.id", ondelete="CASCADE"))
     semester_id = Column(UUID(as_uuid=True), ForeignKey("semesters.id", ondelete="CASCADE"))
 

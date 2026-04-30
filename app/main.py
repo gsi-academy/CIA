@@ -7,7 +7,6 @@ from app.models import models
 from app.routes.auth import router as auth_router
 from app.routes.admin import router as admin_router
 from app.routes.user import router as user_router
-from app.routes.academic import router as academic_router
 
 from app.database import Base, engine
 from fastapi.middleware.cors import CORSMiddleware
@@ -33,10 +32,20 @@ Base.metadata.create_all(bind=engine)
 from sqlalchemy import text
 with engine.connect() as conn:
     try:
-        conn.execute(text("ALTER TABLE santri ADD COLUMN IF NOT EXISTS birth_info VARCHAR"))
-        conn.execute(text("ALTER TABLE santri ADD COLUMN IF NOT EXISTS address TEXT"))
-        conn.execute(text("ALTER TABLE santri ADD COLUMN IF NOT EXISTS guardian_name VARCHAR"))
-        conn.execute(text("ALTER TABLE santri ADD COLUMN IF NOT EXISTS musyrif_id UUID REFERENCES users(id)"))
+        # Rename table santri to students if it exists
+        conn.execute(text("ALTER TABLE IF EXISTS santri RENAME TO students"))
+        
+        # Rename santri_id columns to student_id in various tables
+        conn.execute(text("ALTER TABLE IF EXISTS reports RENAME COLUMN santri_id TO student_id"))
+        conn.execute(text("ALTER TABLE IF EXISTS kms_profiles RENAME COLUMN santri_id TO student_id"))
+        conn.execute(text("ALTER TABLE IF EXISTS treatments RENAME COLUMN santri_id TO student_id"))
+        conn.execute(text("ALTER TABLE IF EXISTS student_achievements RENAME COLUMN santri_id TO student_id"))
+        conn.execute(text("ALTER TABLE IF EXISTS student_analysis_snapshots RENAME COLUMN santri_id TO student_id"))
+        
+        conn.execute(text("ALTER TABLE students ADD COLUMN IF NOT EXISTS birth_info VARCHAR"))
+        conn.execute(text("ALTER TABLE students ADD COLUMN IF NOT EXISTS address TEXT"))
+        conn.execute(text("ALTER TABLE students ADD COLUMN IF NOT EXISTS guardian_name VARCHAR"))
+        conn.execute(text("ALTER TABLE students ADD COLUMN IF NOT EXISTS musyrif_id UUID REFERENCES users(id)"))
         conn.execute(text("ALTER TABLE kms_main_indicators ADD COLUMN IF NOT EXISTS weight FLOAT DEFAULT 1.0"))
         conn.commit()
     except Exception as e:
@@ -53,7 +62,6 @@ API_PREFIX = "/api/v1"
 app.include_router(auth_router, prefix=API_PREFIX)
 app.include_router(admin_router, prefix=API_PREFIX)
 app.include_router(user_router, prefix=API_PREFIX)
-app.include_router(academic_router, prefix=API_PREFIX)
 
 app.add_middleware(
     CORSMiddleware,
