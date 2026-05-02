@@ -264,9 +264,25 @@ def delete_musyrif(id: str, db: Session = Depends(get_db), admin=Depends(get_cur
     musyrif = db.query(User).filter(User.id == id, User.role == 1).first()
     if not musyrif:
         raise HTTPException(status_code=404, detail="Musyrif tidak ditemukan")
+    
     name = musyrif.name
+    
+    # Lepaskan relasi agar tidak error constraint (FK)
+    # 1. Update students yang dibimbing musyrif ini
+    db.query(Student).filter(Student.musyrif_id == id).update({Student.musyrif_id: None})
+    
+    # 2. Update reports yang dibuat musyrif ini
+    db.query(Report).filter(Report.musyrif_id == id).update({Report.musyrif_id: None})
+    
+    # 3. Update activity logs yang dilakukan musyrif ini
+    db.query(ActivityLog).filter(ActivityLog.user_id == id).update({ActivityLog.user_id: None})
+    
+    # 4. Update analysis snapshots yang dilakukan musyrif ini
+    db.query(StudentAnalysisSnapshot).filter(StudentAnalysisSnapshot.performed_by == id).update({StudentAnalysisSnapshot.performed_by: None})
+
     db.delete(musyrif)
     db.commit()
+    
     log_action(db, admin.get("sub"), "DELETE_MUSYRIF", f"Deleted account for {name}")
     return {
         "data": None,
