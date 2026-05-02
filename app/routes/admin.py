@@ -355,21 +355,46 @@ def get_admin_student_detail(id: str, db: Session = Depends(get_db), admin=Depen
         "message": "Student detail retrieved successfully"
     }
 
+# Cukup pake /students/{id}/grades karena prefix /admin udah ada di atas
+@router.get("/students/{id}/grades", summary="Admin: Get Student Grades")
+def get_student_grades_admin(id: str, db: Session = Depends(get_db), current_user = Depends(get_current_admin)):
+    # Pastiin AcademicGrade ini nama model yang bener, kalau tadi lu rename jadi StudentGrade, ganti di sini
+    grades = db.query(StudentGrade, Semester).join(
+        Semester, StudentGrade.semester_id == Semester.id
+    ).filter(StudentGrade.student_id == id).all()
+    
+    return {
+        "status": "success",
+        "data": [
+            {
+                "semester_name": sem.name,
+                "nh": g.nh,
+                "nb": g.nb,
+                "na": g.na,
+                "is_active": sem.is_active
+            } for g, sem in grades
+        ]
+    }
+
 @router.post("/students")
 def create_student(data: StudentCreate, db: Session = Depends(get_db), admin=Depends(get_current_admin)):
-    student = Student(**data.dict())
+    # Paksa bikin ID baru kalau dari UI kosong
+    student_dict = data.dict()
+    if not student_dict.get('id'):
+        student_dict['id'] = uuid.uuid4()
+        
+    student = Student(**student_dict)
     db.add(student)
     try:
         db.commit()
-    except IntegrityError:
+        db.refresh(student)
+        print(f"✅ BERHASIL INSERT: {student.name} dengan ID {student.id}")
+    except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=400, detail="NIS sudah terdaftar atau format salah")
-    db.refresh(student)
-    log_action(db, admin.get("sub"), "CREATE_STUDENT", f"Enrolled student {student.name} (NIS: {student.nis})")
-    return {
-        "data": StudentResponse.from_orm(student),
-        "message": "Student created successfully"
-    }
+        print(f"❌ GAGAL INSERT: {str(e)}") # Liat ini di terminal FastAPI lu
+        raise HTTPException(status_code=500, detail=f"Database Error: {str(e)}")
+        
+    return {"data": StudentResponse.from_orm(student), "message": "Sip, masuk!"}
 
 @router.patch("/students/{id}/assign-musyrif", summary="Set Musyrif Domain for Student")
 def assign_musyrif(id: str, musyrif_id: uuid.UUID, db: Session = Depends(get_db), admin=Depends(get_current_admin)):
@@ -447,6 +472,26 @@ def export_students(db: Session = Depends(get_db), admin=Depends(get_current_adm
     return {
         "data": students,
         "message": "Student records retrieved for export"
+    }
+
+@router.get("/admin/students/{id}/grades", summary="Admin: Get Student Grades")
+def get_student_grades_admin(id: str, db: Session = Depends(get_db), current_user = Depends(get_current_admin)):
+    # Ambil data nilai dan gabung dengan tabel Semester
+    grades = db.query(AcademicGrade, Semester).join(
+        Semester, AcademicGrade.semester_id == Semester.id
+    ).filter(AcademicGrade.student_id == id).all()
+    
+    return {
+        "status": "success",
+        "data": [
+            {
+                "semester_name": sem.name,
+                "nh": g.nh,
+                "nb": g.nb,
+                "na": g.na,
+                "is_active": sem.is_active
+            } for g, sem in grades
+        ]
     }
 
 # =========================
@@ -896,28 +941,27 @@ def get_students(
     }
 
 @router.post("/academic/classes/{class_id}/students")
-def assign_students(
-    class_id: uuid.UUID,
-    student_ids: list[uuid.UUID],
-    db: Session = Depends(get_db),
-    admin=Depends(get_current_admin)
-):
+def assign_students(class_id: uuid.UUID, student_ids: list[uuid.UUID], db: Session = Depends(get_db), admin=Depends(get_current_admin)):
     cls = db.query(AcademicClass).filter(AcademicClass.id == class_id).first()
     if not cls:
         raise HTTPException(status_code=404, detail="Kelas tidak ditemukan")
     
-    # Hapus relasi yang lama
-    db.query(ClassStudent).filter(ClassStudent.class_id == class_id).delete()
+    # CEK DULU: ID santri beneran ada ga di tabel santri?
+    existing_ids = db.query(Student.id).filter(Student.id.in_(student_ids)).all()
+    valid_ids = [s[0] for s in existing_ids]
     
-    # Tambahkan relasi baru
+    # Kasih tau kalau ada ID yang ngaco
     for sid in student_ids:
+        if sid not in valid_ids:
+            raise HTTPException(status_code=400, detail=f"Santri ID {sid} ga ketemu di database!")
+
+    # Kalau semua OK, baru hajar
+    db.query(ClassStudent).filter(ClassStudent.class_id == class_id).delete()
+    for sid in valid_ids:
         db.add(ClassStudent(class_id=class_id, student_id=sid))
         
     db.commit()
-    return {
-        "data": None,
-        "message": "Students assigned to class successfully"
-    }
+    return {"data": None, "message": "Students assigned to class successfully"}
 
 @router.get("/academic/classes/{class_id}/grades")
 def get_class_grades(
@@ -943,27 +987,31 @@ def upsert_grades(
     admin=Depends(get_current_admin)
 ):
     for g in payload.grades:
+        # Pake student_id (TANPA 'S') supaya sinkron sama DB
         stmt = insert(StudentGrade).values(
-            student_id=g.studentId,
+            id=uuid.uuid4(),
+            student_id=g.studentId, # Pastiin ini student_id
             class_id=payload.classId,
             semester_id=payload.semesterId,
             nh=g.nh,
             nb=g.nb,
-            na=g.na
+            na=g.na,
+            created_at=datetime.now(),
+            updated_at=datetime.now()
         ).on_conflict_do_update(
-            index_elements=["student_id", "class_id", "semester_id"],
+            # INI BIANG KEROKNYA: Ganti 'students_id' jadi 'student_id'
+            index_elements=["student_id", "class_id", "semester_id"], 
             set_={
                 "nh": g.nh,
                 "nb": g.nb,
-                "na": g.na
+                "na": g.na,
+                "updated_at": datetime.now()
             }
         )
-
         db.execute(stmt)
 
     db.commit()
-
-    return {"message": "Grades upserted successfully"}
+    return {"message": "Grades updated successfully"}
 
 
 # =========================
@@ -973,7 +1021,7 @@ from app.services.analysis_service import run_analysis_for_student, format_full_
 from app.models.models import StudentAnalysisSnapshot
 from typing import Optional
 
-@router.post("/analyze/student/{student_id}", summary="Admin: Analisis 1 Student")
+@router.post("/analyze/student/{students_id}", summary="Admin: Analisis 1 Student")
 def admin_analyze_student(
     student_id: str,
     semester_id: str,
@@ -1017,11 +1065,11 @@ def admin_analyze_domain(
         try:
             res = run_analysis_for_student(str(student.id), semester_id, admin.get("sub"), db)
             if "error" in res:
-                errors.append({"student_id": str(student.id), "name": student.name, "error": res["error"]})
+                errors.append({"students_id": str(student.id), "name": student.name, "error": res["error"]})
             else:
-                results.append({"student_id": str(student.id), "name": student.name, "snapshot_id": res["snapshot_id"]})
+                results.append({"students_id": str(student.id), "name": student.name, "snapshot_id": res["snapshot_id"]})
         except Exception as e:
-            errors.append({"student_id": str(student.id), "name": student.name, "error": str(e)})
+            errors.append({"students_id": str(student.id), "name": student.name, "error": str(e)})
 
     log_action(db, admin.get("sub"), "ANALYZE_DOMAIN",
                f"Batch analysis for domain {musyrif.name}: {len(results)} OK, {len(errors)} failed")
@@ -1045,9 +1093,9 @@ def admin_analyze_all(
             if "error" in res:
                 errors.append({"student_id": str(student.id), "name": student.name, "error": res["error"]})
             else:
-                results.append({"student_id": str(student.id), "name": student.name, "snapshot_id": res["snapshot_id"]})
+                results.append({"students_id": str(student.id), "name": student.name, "snapshot_id": res["snapshot_id"]})
         except Exception as e:
-            errors.append({"student_id": str(student.id), "name": student.name, "error": str(e)})
+            errors.append({"students_id": str(student.id), "name": student.name, "error": str(e)})
 
     log_action(db, admin.get("sub"), "ANALYZE_ALL",
                f"Global batch analysis: {len(results)} OK, {len(errors)} failed")
@@ -1060,7 +1108,7 @@ def admin_analyze_all(
 # =========================
 # 7. HISTORY LAPORAN (ADMIN)
 # =========================
-@router.get("/history/reports/{student_id}", summary="Admin: History Laporan Student")
+@router.get("/history/reports/{students_id}", summary="Admin: History Laporan Student")
 def admin_get_report_history(
     student_id: str,
     semester_id: Optional[str] = None,
@@ -1111,7 +1159,7 @@ def admin_get_report_history(
 # =========================
 # 8. HISTORY ANALISIS (ADMIN)
 # =========================
-@router.get("/history/analysis/{student_id}", summary="Admin: Daftar Snapshot Analisis Student")
+@router.get("/history/analysis/{students_id}", summary="Admin: Daftar Snapshot Analisis Student")
 def admin_get_analysis_history(
     student_id: str,
     semester_id: Optional[str] = None,
@@ -1155,7 +1203,7 @@ def admin_get_analysis_history(
     }
 
 
-@router.get("/history/analysis/{student_id}/{snapshot_id}", summary="Admin: Detail Lengkap 1 Snapshot Analisis")
+@router.get("/history/analysis/{students_id}/{snapshot_id}", summary="Admin: Detail Lengkap 1 Snapshot Analisis")
 def admin_get_analysis_detail(
     student_id: str,
     snapshot_id: str,
