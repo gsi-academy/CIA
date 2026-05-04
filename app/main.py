@@ -28,28 +28,33 @@ def health_check():
 # BUAT SEMUA TABEL
 Base.metadata.create_all(bind=engine)
 
-# QUICK FIX: Migrasi kolom yang hilang (birth_info, address, guardian_name, musyrif_id)
-from sqlalchemy import text
-with engine.connect() as conn:
-    try:
-        # Rename table santri to students if it exists
-        conn.execute(text("ALTER TABLE IF EXISTS santri RENAME TO students"))
-        
-        # Rename santri_id columns to student_id in various tables
-        conn.execute(text("ALTER TABLE IF EXISTS reports RENAME COLUMN santri_id TO student_id"))
-        conn.execute(text("ALTER TABLE IF EXISTS kms_profiles RENAME COLUMN santri_id TO student_id"))
-        conn.execute(text("ALTER TABLE IF EXISTS treatments RENAME COLUMN santri_id TO student_id"))
-        conn.execute(text("ALTER TABLE IF EXISTS student_achievements RENAME COLUMN santri_id TO student_id"))
-        conn.execute(text("ALTER TABLE IF EXISTS student_analysis_snapshots RENAME COLUMN santri_id TO student_id"))
-        
-        conn.execute(text("ALTER TABLE students ADD COLUMN IF NOT EXISTS birth_info VARCHAR"))
-        conn.execute(text("ALTER TABLE students ADD COLUMN IF NOT EXISTS address TEXT"))
-        conn.execute(text("ALTER TABLE students ADD COLUMN IF NOT EXISTS guardian_name VARCHAR"))
-        conn.execute(text("ALTER TABLE students ADD COLUMN IF NOT EXISTS musyrif_id UUID REFERENCES users(id)"))
-        conn.execute(text("ALTER TABLE kms_main_indicators ADD COLUMN IF NOT EXISTS weight FLOAT DEFAULT 1.0"))
-        conn.commit()
-    except Exception as e:
-        print(f"Migration notice: {e}")
+# QUICK FIX: Migrasi kolom yang hilang
+def run_migrations():
+    from sqlalchemy import text
+    with engine.connect() as conn:
+        try:
+            print("🚀 Running quick migrations...")
+            # Rename table santri to students if it exists
+            conn.execute(text("ALTER TABLE IF EXISTS santri RENAME TO students"))
+            
+            # Rename santri_id columns to student_id in various tables
+            for table in ["reports", "kms_profiles", "treatments", "student_achievements", "student_analysis_snapshots"]:
+                try:
+                    conn.execute(text(f"ALTER TABLE IF EXISTS {table} RENAME COLUMN santri_id TO student_id"))
+                except Exception: pass
+            
+            conn.execute(text("ALTER TABLE students ADD COLUMN IF NOT EXISTS birth_info VARCHAR"))
+            conn.execute(text("ALTER TABLE students ADD COLUMN IF NOT EXISTS address TEXT"))
+            conn.execute(text("ALTER TABLE students ADD COLUMN IF NOT EXISTS guardian_name VARCHAR"))
+            conn.execute(text("ALTER TABLE students ADD COLUMN IF NOT EXISTS musyrif_id UUID REFERENCES users(id)"))
+            conn.execute(text("ALTER TABLE kms_main_indicators ADD COLUMN IF NOT EXISTS weight FLOAT DEFAULT 1.0"))
+            conn.commit()
+            print("✅ Migrations completed successfully.")
+        except Exception as e:
+            print(f"⚠️ Migration notice: {e}")
+
+# Jalankan migrasi saat startup
+run_migrations()
 
 # =========================
 # API VERSIONING PREFIX
