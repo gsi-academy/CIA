@@ -24,18 +24,13 @@ app = FastAPI(
 def health_check():
     return {"status": "ok", "service": "cia-api", "version": "2.0.0"}
 
-
-# BUAT SEMUA TABEL
+# Initialize schema migrations
 Base.metadata.create_all(bind=engine)
 
-# QUICK FIX: Migrasi kolom yang hilang (birth_info, address, guardian_name, musyrif_id)
 from sqlalchemy import text
 with engine.connect() as conn:
     try:
-        # Rename table santri to students if it exists
         conn.execute(text("ALTER TABLE IF EXISTS santri RENAME TO students"))
-        
-        # Rename santri_id columns to student_id in various tables
         conn.execute(text("ALTER TABLE IF EXISTS reports RENAME COLUMN santri_id TO student_id"))
         conn.execute(text("ALTER TABLE IF EXISTS kms_profiles RENAME COLUMN santri_id TO student_id"))
         conn.execute(text("ALTER TABLE IF EXISTS treatments RENAME COLUMN santri_id TO student_id"))

@@ -946,16 +946,15 @@ def assign_students(class_id: uuid.UUID, student_ids: list[uuid.UUID], db: Sessi
     if not cls:
         raise HTTPException(status_code=404, detail="Kelas tidak ditemukan")
     
-    # CEK DULU: ID santri beneran ada ga di tabel santri?
+    # Validate student IDs
     existing_ids = db.query(Student.id).filter(Student.id.in_(student_ids)).all()
     valid_ids = [s[0] for s in existing_ids]
     
-    # Kasih tau kalau ada ID yang ngaco
     for sid in student_ids:
         if sid not in valid_ids:
-            raise HTTPException(status_code=400, detail=f"Santri ID {sid} ga ketemu di database!")
+            raise HTTPException(status_code=400, detail=f"Santri ID {sid} tidak ditemukan di database")
 
-    # Kalau semua OK, baru hajar
+    # Proceed with assignment
     db.query(ClassStudent).filter(ClassStudent.class_id == class_id).delete()
     for sid in valid_ids:
         db.add(ClassStudent(class_id=class_id, student_id=sid))
@@ -987,10 +986,9 @@ def upsert_grades(
     admin=Depends(get_current_admin)
 ):
     for g in payload.grades:
-        # Pake student_id (TANPA 'S') supaya sinkron sama DB
         stmt = insert(StudentGrade).values(
             id=uuid.uuid4(),
-            student_id=g.studentId, # Pastiin ini student_id
+            student_id=g.studentId,
             class_id=payload.classId,
             semester_id=payload.semesterId,
             nh=g.nh,
@@ -999,7 +997,6 @@ def upsert_grades(
             created_at=datetime.now(),
             updated_at=datetime.now()
         ).on_conflict_do_update(
-            # INI BIANG KEROKNYA: Ganti 'students_id' jadi 'student_id'
             index_elements=["student_id", "class_id", "semester_id"], 
             set_={
                 "nh": g.nh,

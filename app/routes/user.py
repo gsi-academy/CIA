@@ -177,6 +177,43 @@ def submit_report(data: ReportSubmit, db: Session = Depends(get_db), user=Depend
     db.add(report)
     db.commit()
     return {"data": {"report_id": str(report.id)}, "message": "Laporan disimpan"}
+    
+@router.post("/reports/analyze", summary="Simpan & Analisis Laporan (Synchronous)")
+def submit_and_analyze_report(data: ReportSubmit, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    user_id = user["sub"]
+    
+    # 1. Cek Semester Aktif
+    if data.semester_id == "00000000-0000-0000-0000-000000000000":
+        sem = db.query(Semester).filter(Semester.is_active == True).first()
+        if not sem: raise HTTPException(status_code=400, detail="No active semester")
+        data.semester_id = str(sem.id)
+
+    # 2. Simpan Laporan
+    report = Report(
+        musyrif_id=uuid.UUID(user_id),
+        student_id=uuid.UUID(data.student_id),
+        semester_id=uuid.UUID(data.semester_id),
+        report_date=date.today(),
+        transcript=data.transcript,
+        status=ReportStatus.pending
+    )
+    db.add(report)
+    db.commit()
+    db.refresh(report)
+
+    # 3. Jalankan Analisis Kumulatif Seketika
+    try:
+        analysis_result = run_analysis_for_student(
+            student_id=data.student_id,
+            semester_id=data.semester_id,
+            performer_id=user_id,
+            db=db
+        )
+        return {"data": analysis_result, "message": "Analisis berhasil"}
+    except Exception as e:
+        # Jika analisis gagal, laporan tetap tersimpan tapi return error analisis
+        print(f"Analysis failed: {e}")
+        return {"data": None, "message": f"Laporan disimpan, tapi analisis gagal: {str(e)}"}
 
 # =========================
 # 3. HISTORY ANALISIS

@@ -340,13 +340,13 @@ class StudentGrade(Base):
     semester = relationship("Semester")
 
     
-    class KnowledgeBase(Base):
-        __tablename__ = "knowledge_base"
+class KnowledgeBase(Base):
+    __tablename__ = "knowledge_base"
 
-        id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-        content = Column(Text, nullable=False)
-        embedding = Column(Vector(1536)) # Sesuaikan dimensi OpenAI
-        pilar = Column(String(50))
-        tema = Column(String(100))
-        original_id = Column(Integer)
-        created_at = Column(DateTime, default=datetime.utcnow)
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    content = Column(Text, nullable=False)
+    embedding = Column(Vector(1536)) # Sesuaikan dimensi OpenAI
+    pilar = Column(String(50))
+    tema = Column(String(100))
+    original_id = Column(Integer)
+    created_at = Column(DateTime, default=datetime.utcnow)
