@@ -16,3 +16,4 @@ langchain-openai
 openai
 pgvector
 tiktoken
+pandas
