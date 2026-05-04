@@ -6,7 +6,7 @@ from openai import OpenAI
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 # === CONFIGURATION ===
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+OPENAI_API_KEY = ("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")
 DB_CONFIG = {
     "dbname": "cia_db",
     "user": "postgres",
@@ -43,7 +43,7 @@ def process_and_sync():
 
     # Update nama file sesuai file yang lu kasih
     pillars = [
-        {"main": "mental_3.csv", "detail": "mental_micro_3.csv", "name": "Mental"},
+        {"main": "mental.csv", "detail": "mental_micro.csv", "name": "Mental"},
         {"main": "character.csv", "detail": "character_micro.csv", "name": "Karakter"},
         {"main": "softskill.csv", "detail": "softskill_micro.csv", "name": "Softskill"}
     ]
