@@ -3,12 +3,12 @@
 import uuid
 import enum
 from datetime import datetime
-from sqlalchemy import Column, String, Integer, Text, Date, TIMESTAMP, ForeignKey, Boolean, Float, CheckConstraint
+from sqlalchemy import Column, DateTime, String, Integer, Text, Date, TIMESTAMP, ForeignKey, Boolean, Float, CheckConstraint
 from sqlalchemy.dialects.postgresql import UUID, ENUM
 from sqlalchemy.orm import relationship
 from sqlalchemy import UniqueConstraint
 from app.database import Base
-
+from pgvector.sqlalchemy import Vector
 
 # ================= ENUMS =================
 class ReportStatus(str, enum.Enum):
@@ -338,3 +338,15 @@ class StudentGrade(Base):
     student = relationship("Student")
     kelas = relationship("AcademicClass")
     semester = relationship("Semester")
+
+    
+    class KnowledgeBase(Base):
+        __tablename__ = "knowledge_base"
+
+        id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+        content = Column(Text, nullable=False)
+        embedding = Column(Vector(1536)) # Sesuaikan dimensi OpenAI
+        pilar = Column(String(50))
+        tema = Column(String(100))
+        original_id = Column(Integer)
+        created_at = Column(DateTime, default=datetime.utcnow)
