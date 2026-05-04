@@ -26,7 +26,6 @@ def run_analysis_for_student(
     Mengembalikan dict hasil snapshot yang baru dibuat.
     """
 
-    # ── 1. Cari snapshot terakhir (sebagai baseline) ──────────────────────────
     prev_snapshot = (
         db.query(StudentAnalysisSnapshot)
         .filter(
@@ -44,7 +43,6 @@ def run_analysis_for_student(
     ).all()
     prev_detected_detail_ids: set = {str(d.detail_indicator_id) for d in all_past_detections}
 
-    # ── 2. Ambil laporan baru yang belum dianalisis ───────────────────────────
     report_query = db.query(Report).filter(
         Report.student_id == student_id,
         Report.semester_id == semester_id
@@ -69,11 +67,9 @@ def run_analysis_for_student(
         (prev_snapshot.analyzed_up_to if prev_snapshot else datetime.utcnow())
     )
 
-    # ── 3. Ambil semua indikator ──────────────────────────────────────────────
     all_mains = db.query(KMSMainIndicator).all()
     all_details = db.query(KMSDetailIndicator).all()
 
-    # ── 4. Deteksi indikator BARU dari transcript laporan baru ────────────────
     newly_detected: list[tuple[KMSDetailIndicator, str]] = []  # (detail, evidence)
     for det in all_details:
         if str(det.id) in prev_detected_detail_ids:
@@ -87,7 +83,6 @@ def run_analysis_for_student(
             evidence = "..." + combined_transcript[start:end].strip() + "..."
             newly_detected.append((det, evidence))
 
-    # ── 4.1. Dummy Detection (Temporary for UI demonstration) ────────────────
     if not newly_detected and combined_transcript:
         import random
         # Ambil indikator yang belum pernah terdeteksi sebelumnya
@@ -99,13 +94,10 @@ def run_analysis_for_student(
             for d in dummies:
                 newly_detected.append((d, f"[DUMMY] Terdeteksi dari analisis pola {d.main_indicator.category}."))
 
-    # ── 5. Gabungkan semua deteksi (lama + baru) ─────────────────────────────
     all_detected_detail_ids: set = prev_detected_detail_ids | {
         str(d.id) for d, _ in newly_detected
     }
 
-    # ── 6. Tentukan indikator UTAMA yang tercapai ─────────────────────────────
-    # Rule: cukup 1 detail terdeteksi → main indicator dianggap tercapai
     achieved_main_ids: set = set()
     for main in all_mains:
         for detail in main.details:
@@ -113,7 +105,6 @@ def run_analysis_for_student(
                 achieved_main_ids.add(str(main.id))
                 break
 
-    # ── 7. Hitung skor K/M/S ─────────────────────────────────────────────────
     cat_data: dict = {}
     for cat in ["karakter", "mental", "softskill"]:
         mains_in_cat = [m for m in all_mains if m.category == cat]
@@ -131,7 +122,6 @@ def run_analysis_for_student(
         (cat_data["karakter"]["score"] + cat_data["mental"]["score"] + cat_data["softskill"]["score"]) / 3, 1
     )
 
-    # ── 8. Kumpulkan indikator belum tercapai per kategori ────────────────────
     def get_unachieved(cat: str) -> list:
         """
         Ambil maks 3 indikator yang belum tercapai per kategori.
@@ -158,7 +148,6 @@ def run_analysis_for_student(
     unachieved_m = get_unachieved("mental")
     unachieved_s = get_unachieved("softskill")
 
-    # ── 9. Panggil AI — generate treatment yang dipersonalisasi ───────────────
     # AI menerima transcript student + indikator yang belum tercapai,
     # lalu generate kalimat tindakan yang disesuaikan kondisi student.
     from app.core.ai_engine import generate_treatment
@@ -183,7 +172,6 @@ def run_analysis_for_student(
     treatment_m = merge_with_action(unachieved_m, ai_actions.get("mental", []))
     treatment_s = merge_with_action(unachieved_s, ai_actions.get("softskill", []))
 
-    # ── 9. Generate Insight ───────────────────────────────────────────────────
     total_achieved = len(achieved_main_ids)
     total_all = len(all_mains)
     insight = (
@@ -198,7 +186,6 @@ def run_analysis_for_student(
         f"({cat_data['softskill']['achieved']}/{cat_data['softskill']['total']})."
     )
 
-    # ── 10. Simpan Snapshot ───────────────────────────────────────────────────
     snapshot = StudentAnalysisSnapshot(
         student_id=student_id,
         semester_id=semester_id,
@@ -273,7 +260,6 @@ def run_analysis_for_student(
     db.commit()
     db.refresh(snapshot)
 
-    # ── 11. Bangun Response ───────────────────────────────────────────────────
     return format_full_snapshot(snapshot, db)
 
 
