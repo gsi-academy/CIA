@@ -6,7 +6,7 @@ from openai import OpenAI
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 # === CONFIGURATION ===
-OPENAI_API_KEY = ("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")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 DB_CONFIG = {
     "dbname": "cia_db",
     "user": "postgres",
