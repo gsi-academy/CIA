@@ -8,7 +8,7 @@ import uuid
 from app.database import SessionLocal
 from app.models.models import (
     Report, ReportAnalysis, ReportParameterDetection, KMSMainIndicator, KMSDetailIndicator,
-    KMSProfile, StudentAchievement, Treatment, Student, ReportStatus, Semester
+    KMSProfile, StudentAchievement, Treatment, Student, ReportStatus, Semester, StudentGrade
 )
 from app.core.security import decode_access_token
 from app.core.ai_engine import analyze_report
@@ -251,6 +251,31 @@ def get_student_detail(id: str, db: Session = Depends(get_db), user=Depends(get_
             } if profile else None
         },
         "message": "Student detail retrieved successfully"
+    }
+
+
+@router.get("/students/{student_id}/grades", summary="Musyrif: Get Student Grades")
+def get_student_grades_musyrif(student_id: str, db: Session = Depends(get_db), current_user = Depends(get_current_user)):
+    # Verifikasi hak akses musyrif
+    student = db.query(Student).filter(Student.id == student_id, Student.musyrif_id == current_user["sub"]).first()
+    if not student:
+        raise HTTPException(status_code=403, detail="Akses ditolak.")
+
+    # Pake StudentGrade sesuai model yang lu punya
+    grades = db.query(StudentGrade, Semester).join(
+        Semester, StudentGrade.semester_id == Semester.id
+    ).filter(StudentGrade.student_id == student_id).all()
+    
+    return {
+        "status": "success",
+        "data": [
+            {
+                "semester_name": sem.name,
+                "nh": g.nh,
+                "nb": g.nb,
+                "na": g.na
+            } for g, sem in grades
+        ]
     }
 
 # =========================
