@@ -8,7 +8,8 @@ import uuid
 from app.database import SessionLocal
 from app.models.models import (
     Report, ReportAnalysis, ReportParameterDetection, KMSMainIndicator, KMSDetailIndicator,
-    KMSProfile, StudentAchievement, Treatment, Student, ReportStatus, Semester, StudentGrade
+    KMSProfile, StudentAchievement, Treatment, Student, ReportStatus, Semester, StudentGrade,
+    StudentAnalysisSnapshot, SnapshotDetection
 )
 from app.core.security import decode_access_token
 from app.core.ai_engine import analyze_report
@@ -298,9 +299,17 @@ def get_performance_kms(id: str, db: Session = Depends(get_db), user=Depends(get
     # Get all main indicators
     all_params = db.query(KMSMainIndicator).all()
     
-    # Get student achievements
+    # Get student achievements (main indicators)
     achievements = db.query(StudentAchievement).filter(StudentAchievement.student_id == id).all()
     ach_map = {str(a.parameter_id): a for a in achievements}
+    
+    # Get all detected details for this student to mark them as achieved
+    detected_details = db.query(SnapshotDetection.detail_indicator_id).join(
+        StudentAnalysisSnapshot
+    ).filter(
+        StudentAnalysisSnapshot.student_id == id
+    ).all()
+    detected_detail_ids = {str(d[0]) for d in detected_details}
     
     result = {"karakter": [], "mental": [], "softskill": []}
     for param in all_params:
@@ -311,7 +320,8 @@ def get_performance_kms(id: str, db: Session = Depends(get_db), user=Depends(get
             for d in param.details:
                 details.append({
                     "id": str(d.id),
-                    "text": d.indicator_detail
+                    "text": d.indicator_detail,
+                    "achieved": str(d.id) in detected_detail_ids
                 })
                 
             result[param.category].append({
@@ -526,13 +536,13 @@ def submit_report(
 @router.post("/reports/analyze", summary="Kirim Laporan dan Analisis")
 def analyze_report_endpoint(
     data: ReportSubmit, 
+    background_tasks: BackgroundTasks, # 2. Tambahkan parameter ini
     db: Session = Depends(get_db), 
     user=Depends(get_current_user)
 ):
     user_id = user["sub"]
     today = date.today()
 
-    # Tangani default semester_id dari frontend
     if data.semester_id == "00000000-0000-0000-0000-000000000000":
         active_semester = db.query(Semester).filter(Semester.is_active == True).first()
         if active_semester:
@@ -548,34 +558,37 @@ def analyze_report_endpoint(
     if not student:
         raise HTTPException(status_code=403, detail="Anda tidak diizinkan membuat laporan untuk student ini")
 
+    # ... (Kode pengecekan student & pembuatan report pending TETAP SAMA) ...
     report = Report(
         musyrif_id=uuid.UUID(user_id),
         student_id=uuid.UUID(data.student_id),
         semester_id=uuid.UUID(data.semester_id),
         report_date=today,
         transcript=data.transcript,
-        status=ReportStatus.pending
+        status=ReportStatus.pending # Statusnya pending
     )
     db.add(report)
     db.commit()
 
+    # 3. Lempar proses AI ke Background Task agar tidak memblokir respon
     analysis_result = run_analysis_for_student(
+        
         student_id=data.student_id,
         semester_id=data.semester_id,
         performer_id=user_id,
         db=db
     )
-
+    
     if "error" in analysis_result:
         raise HTTPException(status_code=400, detail=analysis_result["error"])
 
+    # 4. Langsung berikan respon ke frontend dalam 0.1 detik!
     return {
+        "message": "Laporan berhasil dikirim dan sedang dianalisis oleh AI di latar belakang.",
         "data": {
             "report_id": str(report.id),
-            "status": "Submited",
-            **analysis_result
-        },
-        "message": "Laporan disimpan dan analisis kumulatif selesai"
+            "status": "Analyzing"
+        }
     }
 
 
@@ -648,7 +661,7 @@ def export_rapor(student_id: str, db: Session = Depends(get_db), user=Depends(ge
 # 5. ANALISIS KUMULATIF
 # =========================
 from app.services.analysis_service import run_analysis_for_student, format_full_snapshot
-from app.models.models import StudentAnalysisSnapshot
+# from app.models.models import StudentAnalysisSnapshot (Moved to top)
 
 @router.post("/analyze/student/{student_id}", summary="Jalankan Analisis Kumulatif untuk 1 Student")
 def analyze_student(
@@ -860,4 +873,106 @@ def get_analysis_snapshot_detail(
     return {
         "data": format_full_snapshot(snapshot, db),
         "message": "Detail snapshot berhasil diambil."
+    }
+
+
+@router.get("/history/timeline/{student_id}", summary="Combined Timeline of Reports and Analysis")
+def get_student_timeline(
+    student_id: str, 
+    semester_id: Optional[str] = None,
+    db: Session = Depends(get_db), 
+    user=Depends(get_current_user)
+):
+    user_id = user["sub"]
+    user_role = user.get("role")
+
+    # Verify access
+    query_s = db.query(Student).filter(Student.id == student_id)
+    if user_role != 0:
+        query_s = query_s.filter(Student.musyrif_id == user_id)
+    student = query_s.first()
+    if not student:
+        raise HTTPException(status_code=404, detail="Student tidak ditemukan atau akses ditolak")
+
+    # Fetch all reports
+    r_query = db.query(Report).filter(Report.student_id == student_id)
+    if semester_id:
+        r_query = r_query.filter(Report.semester_id == semester_id)
+    reports = r_query.order_by(desc(Report.created_at)).all()
+
+    # Fetch all snapshots
+    s_query = db.query(StudentAnalysisSnapshot).filter(StudentAnalysisSnapshot.student_id == student_id)
+    if semester_id:
+        s_query = s_query.filter(StudentAnalysisSnapshot.semester_id == semester_id)
+    snapshots = s_query.order_by(desc(StudentAnalysisSnapshot.performed_at)).all()
+
+    # Mapping reports to snapshots
+    sorted_snapshots = sorted(snapshots, key=lambda x: x.performed_at)
+    report_to_snapshot = {}
+    
+    prev_bound = datetime.min
+    for snap in sorted_snapshots:
+        # Reports processed in this snapshot are between prev_bound and snap.analyzed_up_to
+        bound = snap.analyzed_up_to if snap.analyzed_up_to else snap.performed_at
+        for r in reports:
+            if r.created_at > prev_bound and r.created_at <= bound:
+                report_to_snapshot[str(r.id)] = str(snap.id)
+        prev_bound = bound
+
+    # Grouping
+    snapshot_groups = {
+        str(snap.id): {
+            "type": "snapshot",
+            "id": str(snap.id),
+            "time": snap.performed_at.isoformat(),
+            "data": {
+                "scores": {
+                    "k": snap.karakter_score,
+                    "m": snap.mental_score,
+                    "s": snap.softskill_score,
+                    "o": snap.overall_score
+                },
+                "insight": snap.insight,
+                "reports_count": snap.reports_included
+            },
+            "reports": []
+        } for snap in snapshots
+    }
+    
+    unanalyzed_reports = []
+    for r in reports:
+        r_data = {
+            "id": str(r.id),
+            "date": r.report_date.isoformat() if r.report_date else None,
+            "transcript": r.transcript,
+            "status": r.status,
+            "created_at": r.created_at.isoformat()
+        }
+        sid = report_to_snapshot.get(str(r.id))
+        if sid:
+            snapshot_groups[sid]["reports"].append(r_data)
+        else:
+            unanalyzed_reports.append(r_data)
+
+    # Build final timeline
+    final_timeline = []
+    
+    # 1. Add unanalyzed reports as a group if they exist
+    if unanalyzed_reports:
+        unanalyzed_reports.sort(key=lambda x: x["created_at"], reverse=True)
+        final_timeline.append({
+            "type": "unanalyzed",
+            "time": unanalyzed_reports[0]["created_at"],
+            "reports": unanalyzed_reports
+        })
+
+    # 2. Add snapshots with their reports
+    sorted_groups = sorted(snapshot_groups.values(), key=lambda x: x["time"], reverse=True)
+    for g in sorted_groups:
+        g["reports"].sort(key=lambda x: x["created_at"], reverse=True)
+        final_timeline.append(g)
+
+    return {
+        "data": final_timeline,
+        "message": "Timeline riwayat berhasil dibuat"
     }
