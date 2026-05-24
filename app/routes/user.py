@@ -536,13 +536,13 @@ def submit_report(
 @router.post("/reports/analyze", summary="Kirim Laporan dan Analisis")
 def analyze_report_endpoint(
     data: ReportSubmit, 
-    background_tasks: BackgroundTasks, # 2. Tambahkan parameter ini
     db: Session = Depends(get_db), 
     user=Depends(get_current_user)
 ):
     user_id = user["sub"]
     today = date.today()
 
+    # 1. Validasi Semester
     if data.semester_id == "00000000-0000-0000-0000-000000000000":
         active_semester = db.query(Semester).filter(Semester.is_active == True).first()
         if active_semester:
@@ -550,6 +550,7 @@ def analyze_report_endpoint(
         else:
             raise HTTPException(status_code=400, detail="Tidak ada semester aktif. Silakan hubungi admin.")
 
+    # 2. Validasi Hak Akses Musyrif terhadap Santri
     student = db.query(Student).filter(
         Student.id == uuid.UUID(data.student_id), 
         Student.musyrif_id == uuid.UUID(user_id)
@@ -558,21 +559,21 @@ def analyze_report_endpoint(
     if not student:
         raise HTTPException(status_code=403, detail="Anda tidak diizinkan membuat laporan untuk student ini")
 
-    # ... (Kode pengecekan student & pembuatan report pending TETAP SAMA) ...
+    # 3. Simpan Report ke Database (Status langsung completed/diproses)
     report = Report(
         musyrif_id=uuid.UUID(user_id),
         student_id=uuid.UUID(data.student_id),
         semester_id=uuid.UUID(data.semester_id),
         report_date=today,
         transcript=data.transcript,
-        status=ReportStatus.pending # Statusnya pending
+        status="completed" # Ubah dari pending menjadi completed karena akan langsung dianalisis
     )
     db.add(report)
     db.commit()
+    db.refresh(report) # Refresh untuk memastikan ID report terambil
 
-    # 3. Lempar proses AI ke Background Task agar tidak memblokir respon
+    # 4. Eksekusi Proses AI (Sinkron/Menunggu selesai)
     analysis_result = run_analysis_for_student(
-        
         student_id=data.student_id,
         semester_id=data.semester_id,
         performer_id=user_id,
@@ -582,13 +583,10 @@ def analyze_report_endpoint(
     if "error" in analysis_result:
         raise HTTPException(status_code=400, detail=analysis_result["error"])
 
-    # 4. Langsung berikan respon ke frontend dalam 0.1 detik!
+    # 5. Kembalikan Respon beserta Data Analisis ke Frontend
     return {
-        "message": "Laporan berhasil dikirim dan sedang dianalisis oleh AI di latar belakang.",
-        "data": {
-            "report_id": str(report.id),
-            "status": "Analyzing"
-        }
+        "message": "Laporan berhasil dikirim dan dianalisis.",
+        "data": analysis_result
     }
 
 
